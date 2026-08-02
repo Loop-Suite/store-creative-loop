@@ -69,9 +69,9 @@ impl Llm {
             }
             if self.verbose {
                 eprintln!(
-                    "[json retry {}/{}] {}",
+                    "[json attempt {}/{}] {:#}",
                     attempt + 1,
-                    self.retries,
+                    self.retries + 1,
                     last_error.as_ref().expect("retry error")
                 );
             }
