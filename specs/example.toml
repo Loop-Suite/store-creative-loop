@@ -1,0 +1,141 @@
+name = "Example multi-store creative review"
+context = "A productivity app is preparing one coherent store story across phone, tablet, and Google Play feature art."
+audience = "Busy people comparing unfamiliar productivity apps from a small store preview."
+product_truth = [
+  "The app supports phone and tablet layouts.",
+  "Every claim shown in a creative must be demonstrable in the shipped build."
+]
+prohibited_claims = [
+  "#1 app",
+  "guaranteed results",
+  "free when a paid commitment is required"
+]
+thumbnail_width = 220
+critic_backends = ["claude", "openrouter", "claude"]
+openrouter_critic_model = "openai/gpt-4.1-mini"
+
+[[targets]]
+id = "apple_iphone_65_ko"
+store = "apple"
+device = "iPhone 6.5-inch display"
+locale = "ko-KR"
+kind = "screenshot"
+required = true
+min_assets = 3
+max_assets = 10
+allowed_sizes = [{ width = 1284, height = 2778 }]
+
+[[targets]]
+id = "apple_ipad_13_ko"
+store = "apple"
+device = "iPad 13-inch display"
+locale = "ko-KR"
+kind = "screenshot"
+required = true
+min_assets = 3
+max_assets = 10
+allowed_sizes = [
+  { width = 2048, height = 2732 },
+  { width = 2064, height = 2752 }
+]
+
+[[targets]]
+id = "google_phone_ko"
+store = "google"
+device = "Android phone"
+locale = "ko-KR"
+kind = "screenshot"
+required = true
+min_assets = 2
+max_assets = 8
+# With no allowed_sizes, Google Play's general 320–3840 px / 2:1 geometry gate applies.
+
+[[targets]]
+id = "google_feature_ko"
+store = "google"
+device = "Google Play feature graphic"
+locale = "ko-KR"
+kind = "feature_graphic"
+required = true
+min_assets = 1
+max_assets = 1
+exact_assets = 1
+allowed_sizes = [{ width = 1024, height = 500 }]
+
+[[criteria]]
+id = "first_glance"
+name = "First-glance comprehension"
+weight = 1.3
+guide = "At store thumbnail scale, can a new viewer identify the product promise and intended category quickly?"
+
+[[criteria]]
+id = "value_clarity"
+name = "Value clarity"
+weight = 1.2
+guide = "Does the set communicate concrete user value instead of generic superlatives?"
+
+[[criteria]]
+id = "sequence"
+name = "Sequence and narrative"
+weight = 1.0
+guide = "Do frames progress without repetition, and do the first frames carry the strongest story?"
+
+[[criteria]]
+id = "visual_hierarchy"
+name = "Visual hierarchy"
+weight = 1.0
+guide = "Are copy, product UI, contrast, spacing, and focal points legible without visual competition?"
+
+[[criteria]]
+id = "truth_trust"
+name = "Truth and trust"
+weight = 1.4
+guide = "Are claims supported by supplied product truths, and does the creative avoid misleading UI or unsupported status claims?"
+
+[[criteria]]
+id = "device_fit"
+name = "Device and format fit"
+weight = 0.9
+guide = "Does each phone, tablet, and feature-graphic target use its space intentionally rather than merely scaling one composition?"
+
+[[criteria]]
+id = "localization_accessibility"
+name = "Localization and accessibility"
+weight = 1.1
+guide = "Are language, text density, contrast, reading order, and culturally specific assumptions appropriate for the locale?"
+
+[[lenses]]
+id = "first_time_user"
+name = "First-time store visitor"
+instruction = "Start with an unprimed thumbnail read. Note what is actually understood before interpreting intent."
+
+[[lenses]]
+id = "conversion_strategy"
+name = "Store conversion strategist"
+instruction = "Examine message-market fit, sequencing, differentiation, and whether the proposed experiment isolates one useful hypothesis."
+
+[[lenses]]
+id = "visual_design"
+name = "Visual and brand designer"
+instruction = "Inspect hierarchy, typography, composition, rhythm, image/copy relationship, coherence, and category distinctiveness."
+
+[[lenses]]
+id = "trust_policy"
+name = "Trust and store-policy reviewer"
+instruction = "Look for unsupported claims, simulated product behavior, misleading price/status signals, and policy-sensitive creative choices."
+
+[[lenses]]
+id = "accessibility_localization"
+name = "Accessibility and localization reviewer"
+instruction = "Inspect contrast, small-scale readability, reading order, text expansion risk, locale fit, and avoidable exclusion."
+
+[[lenses]]
+id = "device_specialist"
+name = "Phone and tablet specialist"
+instruction = "Compare how the story adapts across phone, tablet, and feature art; flag stretched or reused compositions that ignore format behavior."
+
+[experiment]
+variable = "screenshot and feature-graphic creative set only"
+primary_metric = "first-time download conversion rate"
+guardrails = ["1-day retention", "refund or uninstall signal", "support contacts about misleading claims"]
+min_days = 7
