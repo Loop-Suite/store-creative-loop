@@ -2,15 +2,76 @@
 
 `storeloop` reviews complete app-store creative sets—screenshots, phone/tablet variants, locales, and Google Play feature graphics—without treating an AI panel as conversion truth.
 
-```text
-target spec + candidate sets
-  → deterministic policy gates
-  → anonymized contact sheets
-  → independent blind visual critics
-  → deterministic Borda + corroborated-risk aggregation
-  → offline recommendation
-  → Apple / Google experiment handoff
-  → refine with prior observations
+## The loop
+
+```mermaid
+flowchart LR
+    A["Target spec + candidate sets"] --> B["Deterministic policy gates"]
+    B -->|"BLOCK"| X["Repair invalid assets"]
+    X --> A
+    B -->|"PASS"| C["Anonymous per-target contact sheets"]
+    C --> D1["Critic 1<br/>independent lens"]
+    C --> D2["Critic 2<br/>independent lens"]
+    C --> D3["Critic N<br/>independent lens"]
+    D1 --> E["Deterministic Borda + criterion means<br/>dissent + corroborated risks"]
+    D2 --> E
+    D3 --> E
+    E --> F["Offline recommendation"]
+    F --> G["Registered Apple / Google experiment"]
+    G --> H["Observed market result"]
+    H --> I["Revised candidates + prior state"]
+    I --> A
+```
+
+## Who is allowed to decide what?
+
+```mermaid
+flowchart TB
+    Input["Candidate assets + declared product truth"]
+
+    subgraph Code["Local deterministic Rust code"]
+        Gate["Decode · dimensions · counts · alpha<br/>platform limits · hashes · duplicates"]
+        Blind["Stable anonymization<br/>cyclic presentation order"]
+        Quant["Hard-gate exclusion · Borda arithmetic<br/>means · dissent · corroboration threshold"]
+    end
+
+    subgraph Models["Independent multimodal model judgments"]
+        Read["First-glance + sequence interpretation"]
+        Score["Rubric scores + visible evidence<br/>target/frame-specific findings"]
+    end
+
+    subgraph Market["External validation"]
+        Test["Apple Product Page Optimization<br/>Google Play Store Listing Experiments"]
+        Evidence["Observed conversion + guardrails"]
+    end
+
+    Input --> Gate
+    Gate -->|"PASS only"| Blind
+    Blind --> Read
+    Read --> Score
+    Score --> Quant
+    Quant --> Offline["Offline recommendation<br/>never a causal claim"]
+    Offline --> Test
+    Test --> Evidence
+```
+
+## Refinement state semantics
+
+```mermaid
+stateDiagram-v2
+    [*] --> NEW: corroborated for the first time
+    NEW --> STILL_OPEN: reproduced next round
+    STILL_OPEN --> STILL_OPEN: reproduced again
+    NEW --> NOT_REOBSERVED: absent from new panel
+    STILL_OPEN --> NOT_REOBSERVED: absent from new panel
+    NOT_REOBSERVED --> STILL_OPEN: reappears later
+    NOT_REOBSERVED --> NOT_REOBSERVED: remains absent
+
+    note right of NOT_REOBSERVED
+        This never means FIXED.
+        It only records that the new independent panel
+        did not reproduce the same risk key.
+    end note
 ```
 
 ## Why a separate loop?
