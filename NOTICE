@@ -1,0 +1,9 @@
+store-creative-loop
+Copyright 2026 Loop Suite contributors
+
+The vision LLM adapter in src/llm.rs is derived from Loop-Suite/icon-loop,
+which is distributed under the Apache License 2.0.
+
+The project survey discusses third-party open-source projects for research and
+interoperability. No source code from the AGPL-licensed Storeshots project is
+included in this repository.
