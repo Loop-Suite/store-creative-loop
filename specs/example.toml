@@ -17,24 +17,46 @@ openrouter_critic_model = "openai/gpt-4.1-mini"
 [generation]
 brand_name = "Example"
 tagline = "One clear story across every device"
-source_target = "apple_iphone_65_ko"
+source_target = "apple_iphone_69_ko"
 frame_count = 3
 generator_backend = "openrouter"
 generator_model = "openai/gpt-4.1-mini"
-style_direction = "Confident, product-led, high contrast, minimal decoration, and readable at store thumbnail scale."
+style_direction = "Generate category-native directions rather than one house style. Keep real UI prominent, copy concise, and every visual claim verifiable."
 palette = ["#0B1020", "#182748", "#64E4D2", "#F8F9FC", "#BEC2CF"]
-allowed_layouts = ["device_bottom", "device_center", "ui_focus"]
+allowed_layouts = ["ui_dominant", "ui_focus", "device_center", "device_bottom"]
+creative_families = ["product_led", "outcome_led", "trust_led"]
+verified_claim_tokens = []
+
+[generation.art_direction]
+story_roles = ["hero", "overview", "synthesis"]
+allowed_compositions = ["editorial_hero", "editorial_split", "chapter_field", "synthesis_dark"]
+allowed_decorations = ["spectrum", "orbit", "grid", "signal"]
+frame_accents = ["#64E4D2", "#4D91FF", "#8B59E2", "#EE5050", "#E6A341"]
+max_consecutive_same_composition = 1
+min_unique_compositions = 3
+
+[[generation.segments]]
+id = "new_user"
+audience = "People seeing the category and product for the first time."
+intent = "Understand the primary outcome and whether the app is easy to start."
+keywords = ["easy", "start", "save time"]
+
+[[generation.segments]]
+id = "power_user"
+audience = "Experienced category users comparing advanced capability."
+intent = "Verify depth, control, and concrete differentiation."
+keywords = ["workflow", "control", "advanced"]
 
 [[targets]]
-id = "apple_iphone_65_ko"
+id = "apple_iphone_69_ko"
 store = "apple"
-device = "iPhone 6.5-inch display"
+device = "iPhone 6.9-inch display"
 locale = "ko-KR"
 kind = "screenshot"
 required = true
 min_assets = 3
 max_assets = 10
-allowed_sizes = [{ width = 1284, height = 2778 }]
+allowed_sizes = [{ width = 1260, height = 2736 }]
 
 [[targets]]
 id = "apple_ipad_13_ko"
@@ -46,8 +68,8 @@ required = true
 min_assets = 3
 max_assets = 10
 allowed_sizes = [
-  { width = 2048, height = 2732 },
-  { width = 2064, height = 2752 }
+  { width = 2064, height = 2752 },
+  { width = 2048, height = 2732 }
 ]
 
 [[targets]]
@@ -60,6 +82,17 @@ required = true
 min_assets = 2
 max_assets = 8
 allowed_sizes = [{ width = 1080, height = 1920 }]
+
+[[targets]]
+id = "google_tablet_ko"
+store = "google"
+device = "Android tablet"
+locale = "ko-KR"
+kind = "screenshot"
+required = true
+min_assets = 2
+max_assets = 8
+allowed_sizes = [{ width = 1600, height = 2560 }]
 
 [[targets]]
 id = "google_feature_ko"
@@ -146,7 +179,7 @@ name = "Phone and tablet specialist"
 instruction = "Compare how the story adapts across phone, tablet, and feature art; flag stretched or reused compositions that ignore format behavior."
 
 [experiment]
-variable = "screenshot and feature-graphic creative set only"
+variable = "first-frame value proposition only"
 primary_metric = "first-time download conversion rate"
 guardrails = ["1-day retention", "refund or uninstall signal", "support contacts about misleading claims"]
 min_days = 7

@@ -95,6 +95,56 @@ pub struct Generation {
     pub palette: Vec<String>,
     #[serde(default = "default_layouts")]
     pub allowed_layouts: Vec<String>,
+    #[serde(default = "default_creative_families")]
+    pub creative_families: Vec<String>,
+    #[serde(default)]
+    pub art_direction: ArtDirection,
+    #[serde(default)]
+    pub segments: Vec<GenerationSegment>,
+    /// Exact, verified tokens that may appear in numeric, ranking, award, rating, or
+    /// guarantee-like claims. Empty means those trust markers are blocked.
+    #[serde(default)]
+    pub verified_claim_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ArtDirection {
+    /// Ordered store-story roles. Empty uses hero → overview → detail → synthesis.
+    #[serde(default)]
+    pub story_roles: Vec<String>,
+    #[serde(default = "default_compositions")]
+    pub allowed_compositions: Vec<String>,
+    #[serde(default = "default_decorations")]
+    pub allowed_decorations: Vec<String>,
+    /// Optional per-frame accents. Values remain constrained to #RRGGBB.
+    #[serde(default)]
+    pub frame_accents: Vec<String>,
+    #[serde(default = "default_max_repeated_composition")]
+    pub max_consecutive_same_composition: usize,
+    #[serde(default = "default_min_unique_compositions")]
+    pub min_unique_compositions: usize,
+}
+
+impl Default for ArtDirection {
+    fn default() -> Self {
+        Self {
+            story_roles: Vec::new(),
+            allowed_compositions: default_compositions(),
+            allowed_decorations: default_decorations(),
+            frame_accents: Vec::new(),
+            max_consecutive_same_composition: default_max_repeated_composition(),
+            min_unique_compositions: default_min_unique_compositions(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GenerationSegment {
+    pub id: String,
+    pub audience: String,
+    pub intent: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 impl Default for Experiment {
@@ -160,10 +210,40 @@ fn default_generator_model() -> String {
 }
 fn default_layouts() -> Vec<String> {
     vec![
+        "ui_dominant".to_string(),
         "device_bottom".to_string(),
         "device_center".to_string(),
         "ui_focus".to_string(),
     ]
+}
+fn default_creative_families() -> Vec<String> {
+    vec![
+        "product_led".to_string(),
+        "outcome_led".to_string(),
+        "trust_led".to_string(),
+    ]
+}
+fn default_compositions() -> Vec<String> {
+    vec![
+        "editorial_hero".to_string(),
+        "editorial_split".to_string(),
+        "chapter_field".to_string(),
+        "synthesis_dark".to_string(),
+    ]
+}
+fn default_decorations() -> Vec<String> {
+    vec![
+        "spectrum".to_string(),
+        "orbit".to_string(),
+        "grid".to_string(),
+        "signal".to_string(),
+    ]
+}
+fn default_max_repeated_composition() -> usize {
+    2
+}
+fn default_min_unique_compositions() -> usize {
+    1
 }
 fn default_experiment_variable() -> String {
     "store creative set".to_string()
@@ -267,9 +347,119 @@ impl Spec {
             anyhow::ensure!(
                 generation.allowed_layouts.iter().all(|layout| matches!(
                     layout.as_str(),
-                    "device_bottom" | "device_center" | "ui_focus"
+                    "device_bottom" | "device_center" | "ui_focus" | "ui_dominant"
                 )),
                 "generation.allowed_layouts contains an unsupported layout"
+            );
+            anyhow::ensure!(
+                !generation.creative_families.is_empty(),
+                "generation.creative_families must not be empty"
+            );
+            anyhow::ensure!(
+                generation.creative_families.iter().all(|family| matches!(
+                    family.as_str(),
+                    "product_led" | "outcome_led" | "trust_led"
+                )),
+                "generation.creative_families contains an unsupported family"
+            );
+            ensure_unique(
+                "creative family",
+                generation.creative_families.iter().map(String::as_str),
+            )?;
+            let art_direction = &generation.art_direction;
+            anyhow::ensure!(
+                art_direction.story_roles.is_empty()
+                    || art_direction.story_roles.len() == generation.frame_count,
+                "generation.art_direction.story_roles must be empty or match frame_count"
+            );
+            anyhow::ensure!(
+                art_direction.story_roles.iter().all(|role| matches!(
+                    role.as_str(),
+                    "hero" | "overview" | "detail" | "proof" | "synthesis"
+                )),
+                "generation.art_direction.story_roles contains an unsupported role"
+            );
+            anyhow::ensure!(
+                !art_direction.allowed_compositions.is_empty()
+                    && art_direction
+                        .allowed_compositions
+                        .iter()
+                        .all(|composition| matches!(
+                            composition.as_str(),
+                            "editorial_hero"
+                                | "editorial_split"
+                                | "chapter_field"
+                                | "synthesis_dark"
+                        )),
+                "generation.art_direction.allowed_compositions contains an unsupported composition"
+            );
+            anyhow::ensure!(
+                !art_direction.allowed_decorations.is_empty()
+                    && art_direction
+                        .allowed_decorations
+                        .iter()
+                        .all(|decoration| matches!(
+                            decoration.as_str(),
+                            "none" | "spectrum" | "orbit" | "grid" | "signal"
+                        )),
+                "generation.art_direction.allowed_decorations contains an unsupported decoration"
+            );
+            anyhow::ensure!(
+                art_direction
+                    .frame_accents
+                    .iter()
+                    .all(|color| is_hex_color(color)),
+                "generation.art_direction.frame_accents colors must use #RRGGBB"
+            );
+            anyhow::ensure!(
+                art_direction.max_consecutive_same_composition > 0,
+                "generation.art_direction.max_consecutive_same_composition must be greater than zero"
+            );
+            anyhow::ensure!(
+                art_direction.min_unique_compositions > 0
+                    && art_direction.min_unique_compositions <= generation.frame_count
+                    && art_direction.min_unique_compositions
+                        <= art_direction.allowed_compositions.len(),
+                "generation.art_direction.min_unique_compositions must fit frame_count and allowed_compositions"
+            );
+            ensure_unique(
+                "art-direction composition",
+                art_direction
+                    .allowed_compositions
+                    .iter()
+                    .map(String::as_str),
+            )?;
+            ensure_unique(
+                "art-direction decoration",
+                art_direction.allowed_decorations.iter().map(String::as_str),
+            )?;
+            ensure_unique(
+                "generation segment",
+                generation
+                    .segments
+                    .iter()
+                    .map(|segment| segment.id.as_str()),
+            )?;
+            anyhow::ensure!(
+                generation.segments.iter().all(|segment| {
+                    segment.id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '_' || character == '-'
+                    })
+                }),
+                "generation segment ids support only ASCII letters, numbers, underscore, and hyphen"
+            );
+            anyhow::ensure!(
+                generation.segments.iter().all(|segment| {
+                    !segment.audience.trim().is_empty() && !segment.intent.trim().is_empty()
+                }),
+                "generation segments need non-empty audience and intent"
+            );
+            anyhow::ensure!(
+                generation
+                    .verified_claim_tokens
+                    .iter()
+                    .all(|token| !token.trim().is_empty()),
+                "generation.verified_claim_tokens must not contain empty values"
             );
         }
         Ok(())
@@ -277,6 +467,25 @@ impl Spec {
 
     pub fn target(&self, id: &str) -> Option<&Target> {
         self.targets.iter().find(|t| t.id == id)
+    }
+
+    pub fn generation_segment(&self, id: &str) -> Result<GenerationSegment> {
+        let generation = self
+            .generation
+            .as_ref()
+            .context("spec has no [generation] section")?;
+        if let Some(segment) = generation.segments.iter().find(|segment| segment.id == id) {
+            return Ok(segment.clone());
+        }
+        if id == "default" {
+            return Ok(GenerationSegment {
+                id: "default".to_string(),
+                audience: self.audience.clone(),
+                intent: "general store discovery".to_string(),
+                keywords: Vec::new(),
+            });
+        }
+        anyhow::bail!("unknown generation segment: {id}")
     }
 }
 
@@ -305,8 +514,9 @@ mod tests {
     fn example_spec_parses_and_validates() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/example.toml");
         let spec = Spec::load(&path).unwrap();
-        assert_eq!(spec.targets.len(), 4);
+        assert_eq!(spec.targets.len(), 5);
         assert_eq!(spec.criteria.len(), 7);
         assert_eq!(spec.lenses.len(), 6);
+        assert_eq!(spec.generation_segment("new_user").unwrap().id, "new_user");
     }
 }
