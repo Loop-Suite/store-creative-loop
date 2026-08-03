@@ -2,7 +2,7 @@
 // for multi-target store creative contact sheets.
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IntoDeserializer};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -59,8 +59,13 @@ impl Llm {
                 .call_once(prompt, Some(system), images)
                 .and_then(|raw| extract_json(&raw))
                 .and_then(|json| {
-                    serde_json::from_value(json).with_context(|| {
-                        format!("response does not match {}", std::any::type_name::<T>())
+                    serde_path_to_error::deserialize(json.into_deserializer()).map_err(|error| {
+                        anyhow!(
+                            "response does not match {} at {}: {}",
+                            std::any::type_name::<T>(),
+                            error.path(),
+                            error.inner()
+                        )
                     })
                 });
             match result {
@@ -69,9 +74,9 @@ impl Llm {
             }
             if self.verbose {
                 eprintln!(
-                    "[json retry {}/{}] {}",
+                    "[json attempt {}/{}] {:#}",
                     attempt + 1,
-                    self.retries,
+                    self.retries + 1,
                     last_error.as_ref().expect("retry error")
                 );
             }
@@ -191,7 +196,12 @@ fn call_openrouter(
     let response = ureq::post(OPENROUTER_URL)
         .set("Authorization", &format!("Bearer {api_key}"))
         .set("Content-Type", "application/json")
-        .send_json(serde_json::json!({"model": model, "messages": messages}));
+        .send_json(serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "max_tokens": 8192,
+            "temperature": 0.2
+        }));
     let response = match response {
         Ok(response) => response,
         Err(ureq::Error::Status(code, response)) => {

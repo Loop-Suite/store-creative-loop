@@ -79,6 +79,24 @@ pub struct Experiment {
     pub min_days: u32,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Generation {
+    pub brand_name: String,
+    #[serde(default)]
+    pub tagline: String,
+    pub source_target: String,
+    pub frame_count: usize,
+    #[serde(default = "default_generator_backend")]
+    pub generator_backend: String,
+    #[serde(default = "default_generator_model")]
+    pub generator_model: String,
+    #[serde(default)]
+    pub style_direction: String,
+    pub palette: Vec<String>,
+    #[serde(default = "default_layouts")]
+    pub allowed_layouts: Vec<String>,
+}
+
 impl Default for Experiment {
     fn default() -> Self {
         Self {
@@ -111,6 +129,8 @@ pub struct Spec {
     pub criteria: Vec<Criterion>,
     pub lenses: Vec<Lens>,
     #[serde(default)]
+    pub generation: Option<Generation>,
+    #[serde(default)]
     pub experiment: Experiment,
 }
 
@@ -131,6 +151,19 @@ fn default_critic_backends() -> Vec<String> {
 }
 fn default_openrouter_model() -> String {
     "openai/gpt-4.1-mini".to_string()
+}
+fn default_generator_backend() -> String {
+    "openrouter".to_string()
+}
+fn default_generator_model() -> String {
+    "openai/gpt-4.1-mini".to_string()
+}
+fn default_layouts() -> Vec<String> {
+    vec![
+        "device_bottom".to_string(),
+        "device_center".to_string(),
+        "ui_focus".to_string(),
+    ]
 }
 fn default_experiment_variable() -> String {
     "store creative set".to_string()
@@ -201,12 +234,58 @@ impl Spec {
                 .all(|b| b == "claude" || b == "openrouter"),
             "critic_backends supports only claude and openrouter"
         );
+        if let Some(generation) = &self.generation {
+            anyhow::ensure!(
+                !generation.brand_name.trim().is_empty(),
+                "generation.brand_name must not be empty"
+            );
+            anyhow::ensure!(
+                self.target(&generation.source_target).is_some(),
+                "generation.source_target must reference a target id"
+            );
+            anyhow::ensure!(
+                generation.frame_count > 0,
+                "generation.frame_count must be greater than zero"
+            );
+            anyhow::ensure!(
+                generation.generator_backend == "claude"
+                    || generation.generator_backend == "openrouter",
+                "generation.generator_backend supports only claude and openrouter"
+            );
+            anyhow::ensure!(
+                generation.palette.len() >= 4,
+                "generation.palette must contain at least four colors"
+            );
+            anyhow::ensure!(
+                generation.palette.iter().all(|color| is_hex_color(color)),
+                "generation.palette colors must use #RRGGBB"
+            );
+            anyhow::ensure!(
+                !generation.allowed_layouts.is_empty(),
+                "generation.allowed_layouts must not be empty"
+            );
+            anyhow::ensure!(
+                generation.allowed_layouts.iter().all(|layout| matches!(
+                    layout.as_str(),
+                    "device_bottom" | "device_center" | "ui_focus"
+                )),
+                "generation.allowed_layouts contains an unsupported layout"
+            );
+        }
         Ok(())
     }
 
     pub fn target(&self, id: &str) -> Option<&Target> {
         self.targets.iter().find(|t| t.id == id)
     }
+}
+
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
 }
 
 fn ensure_unique<'a>(label: &str, ids: impl Iterator<Item = &'a str>) -> Result<()> {

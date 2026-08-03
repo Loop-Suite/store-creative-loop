@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 const SYSTEM: &str = "You are one independent, blind reviewer of app-store creative sets. You do not know who made any candidate and you cannot see any other reviewer's opinion. Inspect the supplied images. Separate visible evidence from inference. Never claim conversion uplift or market validation. Return only the requested JSON.";
+const SCHEMA_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Deserialize)]
 struct RawResponse {
@@ -67,14 +68,16 @@ pub fn run_one(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let response_template = response_template(spec, &shifted)?;
     let prompt = format!(
         "# Product\nContext: {}\nAudience: {}\nProduct truths: {}\nProhibited claims: {}\n\n\
          # Your review lens\n{} — {}\n\n\
          # Targets\n{}\n\n\
          # Candidate catalog\n{}\nEach file is a contact sheet. Frames read left-to-right, then top-to-bottom. Judge the whole multi-device set and identify target/frame-specific evidence.\n\n\
          # Scored criteria\n{}\n\n\
-         Review every candidate. Use scores from 1 to 5. `findings.category` should use a stable short token such as hierarchy, copy_truth, sequence, accessibility, localization, device_fit, or policy. `frame` is a filename or 1-based position such as `2`; use `all` only when genuinely set-wide. Ranking must contain every candidate once, best offline recommendation first, with no ties.\n\n\
-         Return JSON only:\n{{\"items\":[{{\"candidate_id\":\"candidate_01\",\"first_glance\":\"...\",\"sequence_read\":\"...\",\"strongest_point\":\"...\",\"biggest_risk\":\"...\",\"criteria\":[{{\"criterion_id\":\"...\",\"score\":1.0,\"evidence\":\"...\",\"why_not_higher\":\"...\"}}],\"findings\":[{{\"category\":\"hierarchy\",\"target_id\":\"...\",\"frame\":\"1\",\"severity\":\"warn\",\"evidence\":\"...\",\"suggested_fix\":\"...\"}}]}}],\"ranking\":[\"candidate_01\"]}}",
+         Review every candidate. Use scores from 1 to 5. Be concise: keep each summary, evidence, limitation, and fix to one sentence of at most 25 words; return only the 1–3 most decision-relevant findings per candidate; keep the complete JSON response below 4,000 tokens. `findings.category` should use a stable short token such as hierarchy, copy_truth, sequence, accessibility, localization, device_fit, or policy. Every finding must contain `category`, `target_id`, `frame`, `severity`, `evidence`, and `suggested_fix`; `target_id` must be one of the listed target ids, `severity` must be `note`, `warn`, or `block`, and `frame` is a filename or 1-based position such as `2` (`all` only when genuinely set-wide). Ranking must contain every candidate once, best offline recommendation first, with no ties.\n\n\
+         The response must contain exactly these candidate ids: {}. Every candidate needs exactly one item, every item needs all listed criterion ids exactly once, and ranking must be a permutation of the same candidate ids.\n\n\
+         Return JSON only. Use this complete template, replace every placeholder, and reorder `ranking` based on your judgment:\n{}",
         spec.context,
         spec.audience,
         list_or_none(&spec.product_truth),
@@ -83,12 +86,17 @@ pub fn run_one(
         lens.instruction,
         targets,
         catalog.join("\n"),
-        criteria
+        criteria,
+        shifted.join(", "),
+        response_template
     );
-    let raw: RawResponse = llm
-        .json_with_images(&prompt, SYSTEM, &images)
-        .with_context(|| format!("critic {critic_index} ({}) failed", llm.provider_label))?;
-    validate_response(spec, &raw, blind_ids, critic_index)?;
+    let raw: RawResponse = retry_with_validation(
+        &prompt,
+        SCHEMA_ATTEMPTS,
+        |request_prompt| llm.json_with_images(request_prompt, SYSTEM, &images),
+        |response| validate_response(spec, response, blind_ids, critic_index),
+    )
+    .with_context(|| format!("critic {critic_index} ({}) failed", llm.provider_label))?;
     Ok(CritiqueRound {
         critic_index,
         provider: llm.provider_label.into(),
@@ -96,6 +104,87 @@ pub fn run_one(
         items: raw.items,
         ranking: raw.ranking,
     })
+}
+
+fn response_template(spec: &Spec, ids: &[String]) -> Result<String> {
+    let example_target = spec
+        .targets
+        .first()
+        .context("cannot build response template without a target")?
+        .id
+        .clone();
+    let criteria = spec
+        .criteria
+        .iter()
+        .map(|criterion| {
+            serde_json::json!({
+                "criterion_id": criterion.id,
+                "score": 1.0,
+                "evidence": "replace with visible evidence",
+                "why_not_higher": "replace with the limiting factor"
+            })
+        })
+        .collect::<Vec<_>>();
+    let items = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "candidate_id": id,
+                "first_glance": "replace",
+                "sequence_read": "replace",
+                "strongest_point": "replace",
+                "biggest_risk": "replace",
+                "criteria": criteria,
+                "findings": [{
+                    "category": "hierarchy",
+                    "target_id": example_target,
+                    "frame": "1",
+                    "severity": "warn",
+                    "evidence": "replace with visible evidence",
+                    "suggested_fix": "replace with a concrete fix"
+                }]
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&serde_json::json!({"items": items, "ranking": ids}))
+        .context("failed to build response template")
+}
+
+fn retry_with_validation<T, Request, Validate>(
+    base_prompt: &str,
+    attempts: usize,
+    mut request: Request,
+    mut validate: Validate,
+) -> Result<T>
+where
+    Request: FnMut(&str) -> Result<T>,
+    Validate: FnMut(&T) -> Result<()>,
+{
+    anyhow::ensure!(attempts > 0, "schema attempts must be greater than zero");
+    let mut prompt = base_prompt.to_string();
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        let result = request(&prompt).and_then(|value| {
+            validate(&value)?;
+            Ok(value)
+        });
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let detail = format!("{error:#}");
+                if attempt < attempts {
+                    eprintln!(
+                        "warning: critic response rejected on schema attempt {attempt}/{attempts}: {detail}"
+                    );
+                    prompt = format!(
+                        "{base_prompt}\n\n# Correction required\nYour previous response was rejected: {detail}. Return a completely new JSON response that satisfies every field, coverage, enum, and range constraint. Do not omit, rename, or duplicate any candidate or criterion id. Every finding must include category, target_id, frame, severity, evidence, and suggested_fix. Keep every text value to one short sentence, include at most three findings per candidate, and keep the entire response below 4,000 tokens."
+                    );
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("critic response validation failed")))
 }
 
 fn validate_response(
@@ -174,5 +263,35 @@ fn list_or_none(values: &[String]) -> String {
         "none supplied".into()
     } else {
         values.join("; ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_schema_failure_is_retried_with_correction_context() {
+        let mut calls = 0;
+        let value = retry_with_validation(
+            "base prompt",
+            3,
+            |prompt| {
+                calls += 1;
+                if calls == 2 {
+                    assert!(prompt.contains("Correction required"));
+                    assert!(prompt.contains("expected 2"));
+                }
+                Ok(calls)
+            },
+            |value| {
+                anyhow::ensure!(*value == 2, "expected 2");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(value, 2);
+        assert_eq!(calls, 2);
     }
 }

@@ -1,6 +1,7 @@
 mod contact_sheet;
 mod critique;
 mod discover;
+mod generation;
 mod llm;
 mod models;
 mod quantify;
@@ -20,7 +21,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "storeloop",
     version,
-    about = "Review app-store creative sets without confusing model consensus for market truth"
+    about = "Generate and refine real multi-device app-store screenshot sets"
 )]
 struct Cli {
     #[arg(long, default_value = "claude", global = true)]
@@ -70,6 +71,38 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         critics: usize,
     },
+    /// Generate real store PNGs, review variants, and feed the winner into the next round.
+    Generate {
+        #[arg(long)]
+        spec: PathBuf,
+        /// Raw captures live under RAW/<generation.source_target>/ in lexical frame order.
+        #[arg(long)]
+        raw: PathBuf,
+        /// TTF, OTF, or supported TTC font used by the deterministic renderer.
+        #[arg(long)]
+        font: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        variants: usize,
+        #[arg(long, default_value_t = 2)]
+        iterations: usize,
+        #[arg(long, default_value_t = 3)]
+        critics: usize,
+    },
+    /// Deterministically re-render an editable generation.json without another LLM call.
+    Render {
+        #[arg(long)]
+        spec: PathBuf,
+        #[arg(long)]
+        raw: PathBuf,
+        #[arg(long)]
+        font: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -96,7 +129,209 @@ fn main() -> Result<()> {
             let prior_state = state::load(prior)?;
             run_review(&cli, spec, candidates, out, *critics, Some(prior_state))
         }
+        Command::Generate {
+            spec,
+            raw,
+            font,
+            out,
+            variants,
+            iterations,
+            critics,
+        } => run_generation_loop(&cli, spec, raw, font, out, *variants, *iterations, *critics),
+        Command::Render {
+            spec,
+            raw,
+            font,
+            manifest,
+            out,
+        } => render_manifest(spec, raw, font, manifest, out),
     }
+}
+
+fn render_manifest(
+    spec_path: &Path,
+    raw_root: &Path,
+    font_path: &Path,
+    manifest_path: &Path,
+    out: &Path,
+) -> Result<()> {
+    ensure_fresh_output(out)?;
+    let spec = Spec::load(spec_path)?;
+    let generation_spec = spec
+        .generation
+        .as_ref()
+        .context("spec needs a [generation] section for the render command")?;
+    let sources = generation::discover_raw_sources(raw_root, generation_spec)?;
+    let manifest = generation::load_manifest(manifest_path)?;
+    generation::render_plans(
+        &spec,
+        generation_spec,
+        &manifest.plans,
+        &sources,
+        font_path,
+        out,
+    )?;
+    println!(
+        "rendered {} plans to {}",
+        manifest.plans.len(),
+        out.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_generation_loop(
+    cli: &Cli,
+    spec_path: &Path,
+    raw_root: &Path,
+    font_path: &Path,
+    out: &Path,
+    variants: usize,
+    iterations: usize,
+    critics: usize,
+) -> Result<()> {
+    anyhow::ensure!(
+        variants >= 2,
+        "generate requires at least two variants for blind review"
+    );
+    anyhow::ensure!(iterations > 0, "iterations must be greater than zero");
+    anyhow::ensure!(critics > 0, "critics must be greater than zero");
+    ensure_fresh_output(out)?;
+    let spec = Spec::load(spec_path)?;
+    let generation_spec = spec
+        .generation
+        .as_ref()
+        .context("spec needs a [generation] section for the generate command")?;
+    let sources = generation::discover_raw_sources(raw_root, generation_spec)?;
+    let generator = build_generator_llm(cli, generation_spec)?;
+    std::fs::create_dir_all(out)?;
+
+    let mut feedback: Option<String> = None;
+    let mut final_winner: Option<String> = None;
+    let mut final_candidates: Option<PathBuf> = None;
+    let mut final_plan: Option<generation::CreativePlan> = None;
+
+    for round in 1..=iterations {
+        let round_dir = out.join(format!("round-{round:02}"));
+        std::fs::create_dir_all(&round_dir)?;
+        let raw_contact = round_dir.join("raw-contact.png");
+        contact_sheet::render_sources(&sources, 320, &raw_contact)?;
+        eprintln!(
+            "generation round {round}/{iterations}: provider={}, variants={variants}",
+            generator.provider_label
+        );
+        let plans = generation::generate_plans(
+            &generator,
+            &spec,
+            generation_spec,
+            &sources,
+            &raw_contact,
+            variants,
+            round,
+            feedback.as_deref(),
+        )?;
+        generation::write_manifest(
+            &round_dir.join("generation.json"),
+            round,
+            &generator,
+            &sources,
+            &plans,
+        )?;
+        let candidates_root = round_dir.join("candidates");
+        generation::render_plans(
+            &spec,
+            generation_spec,
+            &plans,
+            &sources,
+            font_path,
+            &candidates_root,
+        )?;
+        let review_dir = round_dir.join("review");
+        run_review(cli, spec_path, &candidates_root, &review_dir, critics, None)?;
+        let review_state = state::load(&review_dir.join("state.json"))?;
+        let winner = review_state
+            .quant
+            .winner
+            .clone()
+            .context("generation round produced no eligible winner")?;
+        let winning_plan = plans
+            .iter()
+            .find(|plan| plan.id == winner)
+            .with_context(|| format!("winner {winner} has no generation plan"))?
+            .clone();
+        feedback = Some(generation_feedback(&review_state, &winning_plan)?);
+        final_winner = Some(winner);
+        final_candidates = Some(candidates_root);
+        final_plan = Some(winning_plan);
+    }
+
+    let winner = final_winner.context("generation loop produced no winner")?;
+    let candidates_root = final_candidates.context("generation loop produced no candidates")?;
+    let winning_plan = final_plan.context("generation loop produced no plan")?;
+    let final_dir = out.join("final");
+    copy_tree(&candidates_root.join(&winner), &final_dir)?;
+    std::fs::write(
+        out.join("winner.json"),
+        serde_json::to_vec_pretty(&winning_plan)?,
+    )?;
+    std::fs::write(
+        out.join("summary.md"),
+        format!(
+            "# Generated store creative winner\n\n- Winner: `{winner}`\n- Iterations: {iterations}\n- Variants per round: {variants}\n- Final PNGs: [`final/`](final/)\n- Winning plan: [`winner.json`](winner.json)\n\nThe winner is an offline model-assisted recommendation. Use the final round's `review/experiment.md` before making a conversion claim.\n"
+        ),
+    )?;
+    println!("generated winner {winner}: {}", final_dir.display());
+    Ok(())
+}
+
+fn build_generator_llm(cli: &Cli, generation: &spec::Generation) -> Result<Llm> {
+    match generation.generator_backend.as_str() {
+        "claude" => Ok(Llm::claude_cli(
+            cli.claude_bin.clone(),
+            cli.claude_model.clone(),
+            cli.retries,
+            cli.verbose,
+        )),
+        "openrouter" => {
+            Llm::openrouter(generation.generator_model.clone(), cli.retries, cli.verbose)
+        }
+        backend => anyhow::bail!("unsupported generation backend: {backend}"),
+    }
+}
+
+fn generation_feedback(state: &State, winner: &generation::CreativePlan) -> Result<String> {
+    let criterion_means = state
+        .quant
+        .criterion_means
+        .get(&winner.id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(format!(
+        "Previous winner plan:\n{}\n\nWinner criterion means: {}\nCorroborated risks: {}\nMinority opinions: {}\nCreate new variants that preserve proven strengths while each tests one distinct response to these weaknesses. Do not merely paraphrase the previous copy.",
+        serde_json::to_string_pretty(winner)?,
+        serde_json::to_string(&criterion_means)?,
+        serde_json::to_string(&state.quant.corroborated_risks)?,
+        state.quant.minority_opinions.join("; ")
+    ))
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+    anyhow::ensure!(
+        source.is_dir(),
+        "winner directory does not exist: {}",
+        source.display()
+    );
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate(spec_path: &Path, candidates_root: &Path, json: Option<&Path>) -> Result<()> {
