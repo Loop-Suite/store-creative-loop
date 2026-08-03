@@ -96,8 +96,8 @@ Platform rules change. The example spec is a starting configuration, not a subst
 | Stage | Authority | Output |
 |---|---|---|
 | Source ingest | Local filesystem | Ordered primary captures plus target-specific phone/tablet overrides and contact sheet |
-| Creative planning | Model-assisted, constrained by spec | Segment-specific product/outcome/trust hypotheses with editable copy, sequence, palette, and layouts |
-| Multi-target render | Deterministic code | Real phone, tablet, and feature-graphic PNG sets at exact canvas sizes |
+| Creative planning | Model-assisted, constrained by spec | Segment-specific product/outcome/trust hypotheses with editable copy inside fixed story roles and art-direction recipes |
+| Multi-target render | Deterministic code | Role-aware hero, split, chapter, and synthesis compositions using real UI at exact target sizes |
 | Policy gate | Deterministic code | PASS/BLOCK plus file-level evidence |
 | Blind render | Deterministic code | Anonymized per-target contact sheets at controlled thumbnail width |
 | Critique | Independent multimodal model calls | First-glance read, sequence read, rubric evidence, target/frame findings, full ranking |
