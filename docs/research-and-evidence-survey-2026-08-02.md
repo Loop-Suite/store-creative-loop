@@ -1,19 +1,20 @@
-# Store creative review loops: research and evidence survey
+# Store creative generation and evaluation loops: research and evidence survey
 
 Date: 2026-08-02
-Scope: reusable review infrastructure for app-store screenshots, phone/tablet variants, locales, and feature graphics—not a design recommendation for one app.
+Scope: reusable generation, rendering, and evaluation infrastructure for app-store screenshots, phone/tablet variants, locales, and feature graphics—not a design recommendation for one app.
 
 ## Executive conclusion
 
-Existing tools are strong at one of three jobs: generating store art, capturing/exporting it, or validating pixels. None of the reviewed projects closes the full epistemic loop from deterministic platform checks through blind strategic critique to a controlled market experiment. The suitable Loop-Suite contribution is therefore a **review-and-learning loop**, not another template editor:
+Existing tools are strong at one or two jobs: generating store art, capturing/exporting it, validating pixels, or reviewing a finished set. None of the reviewed projects closes the full production and epistemic loop from raw product captures through reproducible multi-device rendering, blind strategic critique, revision, and a controlled market experiment. The suitable Loop-Suite contribution is therefore a **generation-and-learning loop** with an editable plan and deterministic renderer:
 
-1. accept candidates from any generator;
-2. block objectively invalid files before subjective review;
-3. show anonymized, thumbnail-scale sets to mutually independent lenses;
-4. aggregate with visible arithmetic while retaining dissent and provider warnings;
-5. call the result only an offline recommendation;
-6. hand one declared hypothesis to Apple or Google experimentation;
-7. carry observed risks into the next round without calling non-reproduction a fix.
+1. accept ordered raw product captures and declared product truth;
+2. produce several structured creative plans covering copy, sequence, palette, and layout;
+3. render real phone, tablet, and feature-graphic PNGs at exact target sizes;
+4. block objectively invalid files before subjective review;
+5. show anonymized, thumbnail-scale sets to mutually independent lenses;
+6. aggregate with visible arithmetic while retaining dissent and provider warnings;
+7. feed the winning plan and concrete weaknesses into the next generation round;
+8. call the result only an offline recommendation and hand one hypothesis to Apple or Google experimentation.
 
 ## Research method
 
@@ -40,7 +41,7 @@ The survey triangulated five kinds of evidence: Loop-Suite repositories, open-so
 | [fastlane](https://github.com/fastlane/fastlane) (MIT) | Mature capture, framing, localization, and upload automation | Excellent upstream/downstream automation; intentionally not a design-judgment system. |
 | [Paparazzi](https://github.com/cashapp/paparazzi), [Roborazzi](https://github.com/takahirom/roborazzi), [swift-snapshot-testing](https://github.com/pointfreeco/swift-snapshot-testing), [ios-snapshot-test-case](https://github.com/uber/ios-snapshot-test-case), [pixelmatch](https://github.com/mapbox/pixelmatch), [screenshot-tests-for-android](https://github.com/facebook/screenshot-tests-for-android) | Deterministic capture and pixel-diff infrastructure across Android, iOS, and generic images | A diff says that pixels changed, not whether the new store story is clearer or causally better. These are compatible upstream regression gates. |
 
-The architectural split is deliberate: generators and snapshot systems can feed candidate directories; `storeloop` should not make teams abandon their existing renderer.
+The architecture remains interoperable: external generators and snapshot systems can feed candidate directories, while `storeloop` now also provides a minimal structured planner and deterministic multi-target renderer. Teams can use the entire creation loop or enter at `render`, `validate`, or `review` without abandoning an existing pipeline.
 
 ## Academic evidence and design implications
 
@@ -79,17 +80,21 @@ Platform rules change. The example spec is a starting configuration, not a subst
 
 | Stage | Authority | Output |
 |---|---|---|
-| Ingest | Local filesystem | Ordered candidate/target manifest |
+| Source ingest | Local filesystem | Ordered raw-capture manifest and contact sheet |
+| Creative planning | Model-assisted, constrained by spec | Multiple editable plans for copy, sequence, palette, and target-aware layouts |
+| Multi-target render | Deterministic code | Real phone, tablet, and feature-graphic PNG sets at exact canvas sizes |
 | Policy gate | Deterministic code | PASS/BLOCK plus file-level evidence |
 | Blind render | Deterministic code | Anonymized per-target contact sheets at controlled thumbnail width |
 | Critique | Independent multimodal model calls | First-glance read, sequence read, rubric evidence, target/frame findings, full ranking |
 | Quantify | Deterministic code | Hard-gate exclusion, Borda rank, criterion means, dissent, correlation warnings, corroborated risks |
+| Regenerate | Winning plan + persisted critique | New variants that preserve strengths and respond to concrete weaknesses |
 | Handoff | Human + platform experiment | Registered control/treatment, metric, guardrails, and live result |
 | Refine | Persisted state + new independent panel | `STILL_OPEN`, `NEW`, or `NOT_REOBSERVED` observations |
 
 ## Non-goals and limitations
 
-- The tool does not generate designs, upload store listings, scrape competitors, or choose a universal house style.
+- The renderer is intentionally plan-driven rather than a full WYSIWYG editor. The tool does not upload listings, scrape competitors, or choose a universal house style.
+- Raw captures and product truth remain required inputs; generation does not invent missing application screens or verified capabilities.
 - It does not OCR or fact-check every word against a running application; product truths and prohibited claims must be supplied honestly.
 - Critics can miss small text, misread UI, or share training-data biases. Contact sheets reduce presentation variance but do not remove model error.
 - Borda count is a transparent tie-breaking rule, not a calibrated probability of market success.

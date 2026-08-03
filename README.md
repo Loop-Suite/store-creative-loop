@@ -1,43 +1,48 @@
 # store-creative-loop
 
-`storeloop` reviews complete app-store creative sets—screenshots, phone/tablet variants, locales, and Google Play feature graphics—without treating an AI panel as conversion truth.
+`storeloop` turns raw app captures into real app-store PNG sets for phone, tablet, and Google Play feature graphics. It generates multiple creative directions, renders every target deterministically, rejects invalid exports, compares the valid variants blindly, and feeds the winning plan plus observed risks into the next generation round.
 
-## The loop
+Review is an internal gate in the creation loop—not the product itself, and never a substitute for a live store experiment.
+
+## The screenshot creation loop
 
 ```mermaid
 flowchart LR
-    A["Target spec + candidate sets"] --> B["Deterministic policy gates"]
-    B -->|"BLOCK"| X["Repair invalid assets"]
-    X --> A
-    B -->|"PASS"| C["Anonymous per-target contact sheets"]
-    C --> D1["Critic 1<br/>independent lens"]
-    C --> D2["Critic 2<br/>independent lens"]
-    C --> D3["Critic N<br/>independent lens"]
-    D1 --> E["Deterministic Borda + criterion means<br/>dissent + corroborated risks"]
-    D2 --> E
-    D3 --> E
-    E --> F["Offline recommendation"]
-    F --> G["Registered Apple / Google experiment"]
-    G --> H["Observed market result"]
-    H --> I["Revised candidates + prior state"]
-    I --> A
+    A["Raw app captures + product truth + target spec"] --> B["LLM creative plans<br/>copy · sequence · layout · palette"]
+    B --> C["Deterministic renderer<br/>phone · tablet · feature graphic"]
+    C --> D["Pixel and platform policy gates"]
+    D -->|"BLOCK"| E["Repair plan or renderer"]
+    E --> C
+    D -->|"PASS"| F["Anonymous contact sheets"]
+    F --> G1["Independent critic 1"]
+    F --> G2["Independent critic 2"]
+    F --> G3["Independent critic N"]
+    G1 --> H["Borda + criterion means<br/>dissent + corroborated risks"]
+    G2 --> H
+    G3 --> H
+    H --> I["Winning plan + concrete feedback"]
+    I -->|"next iteration"| B
+    I --> J["Final store-ready PNG set"]
+    J --> K["Apple / Google experiment"]
 ```
 
 ## Who is allowed to decide what?
 
 ```mermaid
 flowchart TB
-    Input["Candidate assets + declared product truth"]
+    Input["Raw captures + declared product truth"]
+
+    subgraph Models["Model-assisted judgments"]
+        Plan["Creative directions, Korean copy,<br/>frame sequence, layout choice"]
+        Read["First-glance and sequence interpretation"]
+        Score["Rubric scores + visible evidence<br/>target/frame findings"]
+    end
 
     subgraph Code["Local deterministic Rust code"]
+        Render["Exact canvas render<br/>phone · tablet · feature graphic"]
         Gate["Decode · dimensions · counts · alpha<br/>platform limits · hashes · duplicates"]
         Blind["Stable anonymization<br/>cyclic presentation order"]
         Quant["Hard-gate exclusion · Borda arithmetic<br/>means · dissent · corroboration threshold"]
-    end
-
-    subgraph Models["Independent multimodal model judgments"]
-        Read["First-glance + sequence interpretation"]
-        Score["Rubric scores + visible evidence<br/>target/frame-specific findings"]
     end
 
     subgraph Market["External validation"]
@@ -45,14 +50,11 @@ flowchart TB
         Evidence["Observed conversion + guardrails"]
     end
 
-    Input --> Gate
-    Gate -->|"PASS only"| Blind
-    Blind --> Read
-    Read --> Score
-    Score --> Quant
-    Quant --> Offline["Offline recommendation<br/>never a causal claim"]
-    Offline --> Test
-    Test --> Evidence
+    Input --> Plan --> Render --> Gate
+    Gate -->|"PASS only"| Blind --> Read --> Score --> Quant
+    Quant --> Offline["Offline recommendation + refinement feedback"]
+    Offline --> Plan
+    Offline --> Test --> Evidence
 ```
 
 ## Refinement state semantics
@@ -74,83 +76,94 @@ stateDiagram-v2
     end note
 ```
 
-## Why a separate loop?
+## Why a dedicated screenshot loop?
 
-[`aso-loop`](https://github.com/Loop-Suite/aso-loop) handles listing text and [`icon-loop`](https://github.com/Loop-Suite/icon-loop) handles icons. Store screenshots are a different system: meaning depends on the ordered set, thumbnail scale, copy over product UI, locale, device class, and platform constraints. This repository accepts output from any design tool or generator and concentrates on review, evidence, and iteration.
+[`aso-loop`](https://github.com/Loop-Suite/aso-loop) handles listing text and [`icon-loop`](https://github.com/Loop-Suite/icon-loop) handles icons. Store screenshots need an ordered story across device classes: marketing copy sits over real product UI, the first frames must work at thumbnail scale, tablet composition cannot be a blind phone enlargement, and every store target has exact export constraints.
 
-## What is deterministic?
-
-- Decoding, pixel size, actual alpha transparency, required asset count, platform maximum, Google screenshot geometry, feature-graphic dimensions, hashes, and byte-identical duplicates.
-- Candidate anonymization, cyclic presentation-order shifts, hard-gate exclusion, Borda arithmetic, criterion means, and the “reported by at least two critics” corroboration threshold.
-
-Visual scores are model judgments. A deterministic calculation over those judgments is reproducible arithmetic—not verified user preference, causal impact, or truth. `report.md` therefore says **offline recommendation**, and `experiment.md` is the required market-validation handoff.
+The creative plan is editable JSON and the renderer is deterministic. The same plan and source captures therefore reproduce the same target files without another model call.
 
 ## Input convention
 
-Each immediate child of the candidates directory is one complete candidate. Each target id from the TOML spec is a subdirectory; lexical filename order is the intended frame order.
+Raw captures live under the `source_target` declared in `[generation]`. Lexical filename order is the initial feature order.
 
 ```text
-candidates/
-  concept-a/
-    apple_iphone_65_ko/01.png
-    apple_iphone_65_ko/02.png
-    apple_ipad_13_ko/01.png
-    google_phone_ko/01.png
-    google_feature_ko/01.png
-  concept-b/
-    ...
+raw/
+  apple_iphone_65_ko/
+    01.png
+    02.png
+    03.png
 ```
 
-Start from [`specs/example.toml`](specs/example.toml). Platform requirements change, so confirm the target sizes against the current official documentation before production submission.
+Start from [`specs/example.toml`](specs/example.toml). It defines the brand, style direction, palette, allowed layouts, product truths, generation model, target canvas sizes, critique criteria, and experimental guardrails. Platform rules change, so re-check current official specifications before submission.
 
-## Install and run
+## Generate screenshots
 
-Requirements: a Rust toolchain and either the Claude CLI or `OPENROUTER_API_KEY`. Multiple provider families are recommended because several judges from one family can be highly correlated.
+Requirements: a Rust toolchain, a Korean-capable TTF/OTF/TTC font, and either Claude CLI or `OPENROUTER_API_KEY` according to the spec.
 
 ```bash
 cargo build --release
 
-# Fast, deterministic checks; non-zero exit when any candidate is blocked.
+target/release/storeloop generate \
+  --spec specs/example.toml \
+  --raw ./raw \
+  --font /path/to/KoreanFont.ttc \
+  --out ./runs/store-set-01 \
+  --variants 3 \
+  --iterations 2 \
+  --critics 3
+```
+
+Each iteration performs plan → render → validate → blind review → refinement feedback. The final winner is copied to `final/`.
+
+To edit the generated copy, sequence, colors, or layouts manually and reproduce the PNGs without another LLM call:
+
+```bash
+target/release/storeloop render \
+  --spec specs/example.toml \
+  --raw ./raw \
+  --font /path/to/KoreanFont.ttc \
+  --manifest ./runs/store-set-01/round-01/generation.json \
+  --out ./rerendered-candidates
+```
+
+Existing externally designed candidates can still enter at the validation or review stage:
+
+```bash
 target/release/storeloop validate \
   --spec specs/example.toml \
   --candidates ./candidates \
   --json ./validation.json
 
-# Full blind review. The default panel has three independent calls.
 target/release/storeloop review \
   --spec specs/example.toml \
   --candidates ./candidates \
-  --out ./runs/round-01 \
+  --out ./runs/review-01 \
   --critics 3
-
-# Re-review a revision. NOT_REOBSERVED intentionally does not mean fixed.
-target/release/storeloop refine \
-  --spec specs/example.toml \
-  --candidates ./revised-candidates \
-  --prior ./runs/round-01/state.json \
-  --out ./runs/round-02
 ```
 
-Outputs:
+## Outputs
 
-- `state.json`: machine-readable policy evidence, blind map, independent reviews, arithmetic, and prior-round statuses.
-- `report.md`: audit-friendly offline recommendation, dissent, provider-correlation warning, and corroborated risks.
-- `experiment.md`: pre-registration template for Apple Product Page Optimization or Google Play Store Listing Experiments.
-- `blind/`: locally generated contact sheets shown to critics.
+- `round-NN/generation.json`: editable creative plans, source manifest, and generation provenance.
+- `round-NN/candidates/`: rendered phone, tablet, and feature-graphic variants.
+- `round-NN/review/state.json`: policy evidence, blind map, independent reviews, arithmetic, and risk state.
+- `round-NN/review/report.md`: offline recommendation, dissent, provider warnings, and corroborated risks.
+- `round-NN/review/experiment.md`: Apple/Google test pre-registration handoff.
+- `final/`: final-round winning PNG set, ready for human submission review.
+- `winner.json` and `summary.md`: selected creative plan and concise run summary.
 
-## Review safeguards
+## Safeguards and verdict boundary
 
-- Critics do not see each other’s output; this avoids sequential anchoring and conformity.
-- Candidate order rotates by critic to reduce position bias.
-- A policy-blocked candidate cannot win, regardless of model preference.
-- Unanimity creates a correlation warning. Provider diversity is recorded, not assumed.
-- A risk needs two independent critics before it is promoted as corroborated.
-- Refinement records `STILL_OPEN`, `NEW`, or `NOT_REOBSERVED`; it never silently upgrades absence to “fixed.”
-- The recommended creative must still be tested against the live control with one declared variable and explicit guardrails.
+- Rendering, pixel size, actual alpha, target count, hashes, anonymization, rank arithmetic, and risk thresholds are deterministic.
+- Planning, copy, visual interpretation, and rubric scores are model judgments.
+- Critics do not see one another; candidate order rotates to reduce anchoring and position bias.
+- A policy-blocked variant cannot win, regardless of model preference.
+- A risk needs two independent critics before it becomes corroborated.
+- `NOT_REOBSERVED` never silently becomes “fixed.”
+- The winner is an offline model-assisted recommendation. Only a registered live experiment can support a conversion claim.
 
 ## Research basis
 
-The architecture is based on a scoped survey of Loop-Suite patterns, store-creative tooling, snapshot/diff infrastructure, academic work on rapid visual judgment and LLM-judge bias, design-team critique practices, and controlled experimentation. See [`docs/research-and-evidence-survey-2026-08-02.md`](docs/research-and-evidence-survey-2026-08-02.md) for sources, transfer decisions, and limitations.
+The architecture follows a multi-angle survey of Loop-Suite patterns, open-source store-creative generators and capture tools, visual-regression infrastructure, research on rapid visual judgment and judge bias, design-team critique practices, and controlled experimentation. See [`docs/research-and-evidence-survey-2026-08-02.md`](docs/research-and-evidence-survey-2026-08-02.md).
 
 ## License
 

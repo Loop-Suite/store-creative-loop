@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "storeloop",
     version,
-    about = "Review app-store creative sets without confusing model consensus for market truth"
+    about = "Generate and refine real multi-device app-store screenshot sets"
 )]
 struct Cli {
     #[arg(long, default_value = "claude", global = true)]
