@@ -11,6 +11,10 @@ const GAP: u32 = 24;
 pub type BlindMap = BTreeMap<String, String>;
 pub type ContactSheets = BTreeMap<String, Vec<PathBuf>>;
 
+pub fn render_sources(sources: &[PathBuf], cell_width: u32, destination: &Path) -> Result<()> {
+    render_sheet(sources, cell_width, destination)
+}
+
 pub fn build_contact_sheets(
     candidates_root: &Path,
     candidates: &[Candidate],
