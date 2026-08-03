@@ -102,9 +102,19 @@ raw/
     03.png
 ```
 
-Start from [`specs/example.toml`](specs/example.toml). It defines the brand, style direction, palette, allowed layouts, three creative families, audience segments, verified claim tokens, product truths, generation model, target canvas sizes, critique criteria, and experimental guardrails. Its primary Apple targets use the current 6.9-inch iPhone (`1260×2736`) and 13-inch iPad (`2064×2752`) sizes. Platform rules change, so re-check official specifications before submission.
+Start from [`specs/example.toml`](specs/example.toml). It defines the brand, style direction, palette, allowed layouts, three creative families, audience segments, art-direction recipes, verified claim tokens, product truths, generation model, target canvas sizes, critique criteria, and experimental guardrails. Its primary Apple targets use the current 6.9-inch iPhone (`1260×2736`) and 13-inch iPad (`2064×2752`) sizes. Platform rules change, so re-check official specifications before submission.
 
 `verified_claim_tokens` is deliberately empty by default. Rankings, awards, ratings, review/download counts, percentages, guarantees, and superlatives are rejected unless the exact supporting token is explicitly allowlisted.
+
+`[generation.art_direction]` turns a reusable renderer into a store-story system instead of one repeated house template:
+
+- `story_roles` assigns each frame a job such as `hero`, `overview`, `detail`, `proof`, or `synthesis`.
+- `allowed_compositions` selects role-aware structures: dark hero, editorial split, color-field chapter, and dark synthesis.
+- `allowed_decorations` adds restrained spectrum, orbit, grid, or signal motifs without modifying product UI.
+- `frame_accents` permits controlled per-frame color rhythm.
+- repetition gates require composition diversity and cap consecutive use of one recipe.
+
+The planner writes copy into those deterministic recipes; it cannot collapse the set back into identical centered-device frames. Older manifests without the new fields still render through the legacy composition.
 
 ## Generate screenshots
 
@@ -124,7 +134,7 @@ target/release/storeloop generate \
   --critics 3
 ```
 
-Each iteration performs segment selection → three-family hypothesis planning → render → validate → blind review → refinement feedback. The first frame uses the UI-dominant layout when available, and every plan receives a stable hypothesis id. The final winner is copied to `final/`.
+Each iteration performs segment selection → three-family hypothesis planning → story-role assignment → art-direction recipe assignment → render → validate → blind review → refinement feedback. The first frame uses the UI-dominant layout when available, every plan receives a stable hypothesis id, and the configured rhythm gates prevent a flat sequence. The final winner is copied to `final/`.
 
 To edit the generated copy, sequence, colors, or layouts manually and reproduce the PNGs without another LLM call:
 
@@ -154,7 +164,7 @@ target/release/storeloop review \
 
 ## Outputs
 
-- `round-NN/generation.json`: selected segment, target-specific source manifest, creative family, hypothesis id, editable plans, and generation provenance.
+- `round-NN/generation.json`: selected segment, target-specific source manifest, creative family, hypothesis id, story role, composition, decoration, frame accent, editable copy, and generation provenance.
 - `round-NN/candidates/`: rendered phone, tablet, and feature-graphic variants.
 - `round-NN/review/state.json`: policy evidence, blind map, independent reviews, arithmetic, and risk state.
 - `round-NN/review/report.md`: offline recommendation, dissent, provider warnings, and corroborated risks.

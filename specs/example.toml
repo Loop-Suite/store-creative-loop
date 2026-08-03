@@ -27,6 +27,14 @@ allowed_layouts = ["ui_dominant", "ui_focus", "device_center", "device_bottom"]
 creative_families = ["product_led", "outcome_led", "trust_led"]
 verified_claim_tokens = []
 
+[generation.art_direction]
+story_roles = ["hero", "overview", "synthesis"]
+allowed_compositions = ["editorial_hero", "editorial_split", "chapter_field", "synthesis_dark"]
+allowed_decorations = ["spectrum", "orbit", "grid", "signal"]
+frame_accents = ["#64E4D2", "#4D91FF", "#8B59E2", "#EE5050", "#E6A341"]
+max_consecutive_same_composition = 1
+min_unique_compositions = 3
+
 [[generation.segments]]
 id = "new_user"
 audience = "People seeing the category and product for the first time."

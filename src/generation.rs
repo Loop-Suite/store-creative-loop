@@ -4,7 +4,11 @@ use ab_glyph::{FontArc, PxScale};
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_text_mut, text_size};
+use imageproc::drawing::{
+    draw_filled_circle_mut, draw_filled_rect_mut, draw_hollow_circle_mut, draw_line_segment_mut,
+    draw_polygon_mut, draw_text_mut, text_size,
+};
+use imageproc::point::Point;
 use imageproc::rect::Rect;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -19,6 +23,77 @@ pub enum Layout {
     DeviceBottom,
     DeviceCenter,
     UiFocus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryRole {
+    #[default]
+    Legacy,
+    Hero,
+    Overview,
+    Detail,
+    Proof,
+    Synthesis,
+}
+
+impl StoryRole {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Hero => "hero",
+            Self::Overview => "overview",
+            Self::Detail => "detail",
+            Self::Proof => "proof",
+            Self::Synthesis => "synthesis",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Composition {
+    #[default]
+    Legacy,
+    EditorialHero,
+    EditorialSplit,
+    ChapterField,
+    SynthesisDark,
+}
+
+impl Composition {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::EditorialHero => "editorial_hero",
+            Self::EditorialSplit => "editorial_split",
+            Self::ChapterField => "chapter_field",
+            Self::SynthesisDark => "synthesis_dark",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Decoration {
+    #[default]
+    None,
+    Spectrum,
+    Orbit,
+    Grid,
+    Signal,
+}
+
+impl Decoration {
+    fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Spectrum => "spectrum",
+            Self::Orbit => "orbit",
+            Self::Grid => "grid",
+            Self::Signal => "signal",
+        }
+    }
 }
 
 impl Layout {
@@ -71,6 +146,16 @@ pub struct FramePlan {
     #[serde(default)]
     pub chips: Vec<String>,
     pub layout: Layout,
+    #[serde(default)]
+    pub role: StoryRole,
+    #[serde(default)]
+    pub composition: Composition,
+    #[serde(default)]
+    pub decoration: Decoration,
+    #[serde(default)]
+    pub accent: Option<String>,
+    #[serde(default)]
+    pub footer: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -221,6 +306,11 @@ pub fn generate_plans(
     feedback: Option<&str>,
 ) -> Result<Vec<CreativePlan>> {
     let template = plan_template(generation, variants, round, segment)?;
+    let role_sequence = story_roles(generation)?
+        .iter()
+        .map(|role| role.id())
+        .collect::<Vec<_>>()
+        .join(" → ");
     let source_catalog = sources
         .iter()
         .enumerate()
@@ -231,10 +321,10 @@ pub fn generate_plans(
         "# Product\nContext: {}\nGeneral audience: {}\nProduct truths: {}\nProhibited claims: {}\n\n\
          # Selected store segment\nSegment id: {}\nAudience: {}\nIntent: {}\nKeywords: {}\n\n\
          # Store-creative generation task\nCreate exactly {variants} production-ready creative plans for round {round}. Follow the exact creative family assigned to each template plan: `product_led` makes real UI dominant and demonstrates a concrete task; `outcome_led` leads with the user's desired outcome or emotion; `trust_led` emphasizes clarity, control, and visible evidence without inventing social proof. Each plan turns the same ordered raw app captures into a coherent screenshot story. The deterministic renderer—not you—will draw the final pixels.\n\n\
-         Brand: {}\nTagline: {}\nStyle direction: {}\nAllowed palette values (use these exact strings only): {}\nAllowed layouts: {}\nRequired screenshot frames per plan: {}\n\n\
+         Brand: {}\nTagline: {}\nStyle direction: {}\nAllowed palette values (use these exact strings only): {}\nAllowed layouts: {}\nStory roles: {}\nAllowed compositions: {}\nAllowed decorations: {}\nFrame accent options: {}\nRequired screenshot frames per plan: {}\n\n\
          # Ordered raw captures\n{}\nThe attached image is their contact sheet in the same left-to-right, top-to-bottom order. Do not invent product UI.\n\n\
          # Prior-round feedback\n{}\n\n\
-         Write concise store copy, not captions that merely describe the pixels. Headline: at most 24 Korean characters or 42 Latin characters and at most two visual lines. Body: one short sentence. Use 0–3 short chips. The first frame must use `ui_dominant` when that layout is allowed, communicate one benefit, and avoid decorative clutter. Make the first three frames carry the product promise, evidence, and differentiation. Later frames should add non-redundant evidence. Variants may explore their assigned family, but must not change product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
+         Write concise store copy, not captions that merely describe the pixels. Headline: at most 24 Korean characters or 42 Latin characters and at most two visual lines. Body: one short sentence. Use 0–3 short chips. Preserve every assigned story role, composition, decoration, accent, layout, and frame index from the template. Write `footer` as a short payoff or three-part reading axis that adds information without repeating the headline. The first frame must use `ui_dominant` when that layout is allowed, communicate one benefit, and avoid decorative clutter. Make the first three frames carry the product promise, evidence, and differentiation. Later frames should add non-redundant evidence. Visual rhythm comes from role-specific compositions and decorations, not from repeating one centered device template. Variants may explore their assigned family, but must not change product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
          Never write rankings, awards, ratings, review counts, download counts, percentages, guarantees, or superlatives unless the exact supporting token appears in this verified allowlist: {}. An empty allowlist means all such trust markers are prohibited.\n\n\
          Return JSON only. Keep every id/index/field in this complete template, replace all placeholder copy, and preserve the exact number of plans and frames:\n{}",
         spec.context,
@@ -250,6 +340,10 @@ pub fn generate_plans(
         generation.style_direction,
         generation.palette.join(", "),
         generation.allowed_layouts.join(", "),
+        role_sequence,
+        generation.art_direction.allowed_compositions.join(", "),
+        generation.art_direction.allowed_decorations.join(", "),
+        list_or_none(&generation.art_direction.frame_accents),
         generation.frame_count,
         source_catalog,
         feedback.unwrap_or("No prior round. Explore distinct evidence-backed directions."),
@@ -401,6 +495,123 @@ pub fn render_plans(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FrameRecipe {
+    role: StoryRole,
+    composition: Composition,
+    decoration: Decoration,
+}
+
+fn story_roles(generation: &Generation) -> Result<Vec<StoryRole>> {
+    if !generation.art_direction.story_roles.is_empty() {
+        return generation
+            .art_direction
+            .story_roles
+            .iter()
+            .map(|role| story_role_from_id(role))
+            .collect();
+    }
+    let count = generation.frame_count;
+    Ok((0..count)
+        .map(|index| {
+            if index == 0 {
+                StoryRole::Hero
+            } else if index + 1 == count {
+                StoryRole::Synthesis
+            } else if index == 1 {
+                StoryRole::Overview
+            } else {
+                StoryRole::Detail
+            }
+        })
+        .collect())
+}
+
+fn frame_recipes(generation: &Generation, variant: usize) -> Result<Vec<FrameRecipe>> {
+    let roles = story_roles(generation)?;
+    let allowed_compositions = generation
+        .art_direction
+        .allowed_compositions
+        .iter()
+        .map(|value| composition_from_id(value))
+        .collect::<Result<Vec<_>>>()?;
+    let allowed_decorations = generation
+        .art_direction
+        .allowed_decorations
+        .iter()
+        .map(|value| decoration_from_id(value))
+        .collect::<Result<Vec<_>>>()?;
+    let max_repeated = generation.art_direction.max_consecutive_same_composition;
+
+    let mut recipes = Vec::with_capacity(roles.len());
+    let mut repeated = 0_usize;
+    for (index, role) in roles.into_iter().enumerate() {
+        let preferred = match role {
+            StoryRole::Hero => Composition::EditorialHero,
+            StoryRole::Overview => Composition::EditorialSplit,
+            StoryRole::Detail => Composition::ChapterField,
+            StoryRole::Proof => Composition::EditorialSplit,
+            StoryRole::Synthesis => Composition::SynthesisDark,
+            StoryRole::Legacy => Composition::Legacy,
+        };
+        let mut composition = if allowed_compositions.contains(&preferred) {
+            preferred
+        } else {
+            allowed_compositions[(index + variant) % allowed_compositions.len()]
+        };
+        if recipes
+            .last()
+            .map(|recipe: &FrameRecipe| recipe.composition == composition)
+            .unwrap_or(false)
+        {
+            repeated += 1;
+        } else {
+            repeated = 1;
+        }
+        if repeated > max_repeated {
+            if let Some(alternative) = allowed_compositions
+                .iter()
+                .cycle()
+                .skip(index + variant + 1)
+                .take(allowed_compositions.len())
+                .find(|candidate| **candidate != composition)
+            {
+                composition = *alternative;
+                repeated = 1;
+            }
+        }
+        recipes.push(FrameRecipe {
+            role,
+            composition,
+            decoration: allowed_decorations[(index + variant) % allowed_decorations.len()],
+        });
+    }
+
+    let mut unique = recipes
+        .iter()
+        .map(|recipe| recipe.composition)
+        .collect::<HashSet<_>>();
+    for (index, composition) in allowed_compositions.iter().enumerate() {
+        if unique.len() >= generation.art_direction.min_unique_compositions {
+            break;
+        }
+        if unique.insert(*composition) {
+            let replace_index = (index + 1).min(recipes.len().saturating_sub(1));
+            recipes[replace_index].composition = *composition;
+        }
+    }
+    Ok(recipes)
+}
+
+fn frame_accent(generation: &Generation, frame_index: usize, variant: usize) -> String {
+    let accents = &generation.art_direction.frame_accents;
+    if accents.is_empty() {
+        generation.palette[2].clone()
+    } else {
+        accents[(frame_index + variant) % accents.len()].clone()
+    }
+}
+
 fn plan_template(
     generation: &Generation,
     variants: usize,
@@ -413,11 +624,13 @@ fn plan_template(
         .map(|layout| layout_from_id(layout))
         .collect::<Result<Vec<_>>>()?;
     let plans = (0..variants)
-        .map(|variant| {
+        .map(|variant| -> Result<serde_json::Value> {
             let family =
                 &generation.creative_families[variant % generation.creative_families.len()];
+            let recipes = frame_recipes(generation, variant)?;
             let frames = (0..generation.frame_count)
                 .map(|index| {
+                    let recipe = recipes[index];
                     let layout = if index == 0
                         && generation
                             .allowed_layouts
@@ -434,11 +647,16 @@ fn plan_template(
                         "headline": "replace",
                         "body": "replace",
                         "chips": ["replace"],
-                        "layout": layout.id()
+                        "layout": layout.id(),
+                        "role": recipe.role.id(),
+                        "composition": recipe.composition.id(),
+                        "decoration": recipe.decoration.id(),
+                        "accent": frame_accent(generation, index, variant),
+                        "footer": "replace with a short payoff or reading axis"
                     })
                 })
                 .collect::<Vec<_>>();
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "id": format!("variant_{:02}", variant + 1),
                 "family": family,
                 "hypothesis_id": format!("r{round:02}-{}-{:02}", segment.id, variant + 1),
@@ -458,9 +676,9 @@ fn plan_template(
                     "chips": ["replace"],
                     "source_indices": [1, generation.frame_count.min(2)]
                 }
-            })
+            }))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     Ok(serde_json::to_string_pretty(
         &serde_json::json!({"plans": plans}),
     )?)
@@ -479,13 +697,19 @@ fn normalize_and_validate(
         "expected {variants} plans, found {}",
         plans.len()
     );
-    let allowed_colors = generation.palette.iter().cloned().collect::<HashSet<_>>();
+    let allowed_colors = generation
+        .palette
+        .iter()
+        .chain(generation.art_direction.frame_accents.iter())
+        .cloned()
+        .collect::<HashSet<_>>();
     let allowed_layouts = generation
         .allowed_layouts
         .iter()
         .cloned()
         .collect::<HashSet<_>>();
     for (plan_index, plan) in plans.iter_mut().enumerate() {
+        let recipes = frame_recipes(generation, plan_index)?;
         plan.id = format!("variant_{:02}", plan_index + 1);
         let expected_family =
             &generation.creative_families[plan_index % generation.creative_families.len()];
@@ -526,13 +750,18 @@ fn normalize_and_validate(
             plan.frames.len()
         );
         plan.frames.sort_by_key(|frame| frame.index);
-        for (expected_index, frame) in plan.frames.iter().enumerate() {
+        for (expected_index, frame) in plan.frames.iter_mut().enumerate() {
             anyhow::ensure!(
                 frame.index == expected_index + 1,
                 "{} frame indices must be exactly 1..{}",
                 plan.id,
                 generation.frame_count
             );
+            let recipe = recipes[expected_index];
+            frame.role = recipe.role;
+            frame.composition = recipe.composition;
+            frame.decoration = recipe.decoration;
+            frame.accent = Some(frame_accent(generation, expected_index, plan_index));
             anyhow::ensure!(
                 !frame.badge.trim().is_empty(),
                 "{} frame {} badge is empty",
@@ -563,7 +792,62 @@ fn normalize_and_validate(
                 plan.id,
                 frame.index
             );
+            anyhow::ensure!(
+                generation
+                    .art_direction
+                    .allowed_compositions
+                    .iter()
+                    .any(|value| value == frame.composition.id()),
+                "{} frame {} uses a disallowed composition",
+                plan.id,
+                frame.index
+            );
+            anyhow::ensure!(
+                generation
+                    .art_direction
+                    .allowed_decorations
+                    .iter()
+                    .any(|value| value == frame.decoration.id()),
+                "{} frame {} uses a disallowed decoration",
+                plan.id,
+                frame.index
+            );
+            anyhow::ensure!(
+                frame
+                    .accent
+                    .as_ref()
+                    .map(|color| allowed_colors.contains(color))
+                    .unwrap_or(false),
+                "{} frame {} uses a disallowed accent",
+                plan.id,
+                frame.index
+            );
+            anyhow::ensure!(
+                !frame.footer.trim().is_empty(),
+                "{} frame {} footer is empty",
+                plan.id,
+                frame.index
+            );
         }
+        let unique_compositions = plan
+            .frames
+            .iter()
+            .map(|frame| frame.composition)
+            .collect::<HashSet<_>>()
+            .len();
+        anyhow::ensure!(
+            unique_compositions >= generation.art_direction.min_unique_compositions,
+            "{} needs at least {} unique compositions",
+            plan.id,
+            generation.art_direction.min_unique_compositions
+        );
+        let max_run = max_composition_run(&plan.frames);
+        anyhow::ensure!(
+            max_run <= generation.art_direction.max_consecutive_same_composition,
+            "{} repeats one composition {} times",
+            plan.id,
+            max_run
+        );
         if generation
             .allowed_layouts
             .iter()
@@ -606,6 +890,22 @@ fn normalize_and_validate(
         validate_copy_claims(spec, generation, plan)?;
     }
     Ok(())
+}
+
+fn max_composition_run(frames: &[FramePlan]) -> usize {
+    let mut longest = 0_usize;
+    let mut current = 0_usize;
+    let mut previous = None;
+    for frame in frames {
+        if previous == Some(frame.composition) {
+            current += 1;
+        } else {
+            previous = Some(frame.composition);
+            current = 1;
+        }
+        longest = longest.max(current);
+    }
+    longest
 }
 
 fn validate_copy_claims(spec: &Spec, generation: &Generation, plan: &CreativePlan) -> Result<()> {
@@ -680,6 +980,9 @@ fn render_screenshot(
     font: &FontArc,
     source: &RgbaImage,
 ) -> Result<RgbaImage> {
+    if frame.composition != Composition::Legacy {
+        return render_art_directed_screenshot(width, height, brand, frame, palette, font, source);
+    }
     let start = parse_color(&palette.background_start)?;
     let end = parse_color(&palette.background_end)?;
     let accent = parse_color(&palette.accent)?;
@@ -773,6 +1076,473 @@ fn render_screenshot(
         accent,
     );
     Ok(canvas)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_art_directed_screenshot(
+    width: u32,
+    height: u32,
+    brand: &str,
+    frame: &FramePlan,
+    palette: &PalettePlan,
+    font: &FontArc,
+    source: &RgbaImage,
+) -> Result<RgbaImage> {
+    let dark = parse_color(&palette.background_start)?;
+    let dark_end = parse_color(&palette.background_end)?;
+    let text = parse_color(&palette.text)?;
+    let muted = parse_color(&palette.muted)?;
+    let accent = frame
+        .accent
+        .as_deref()
+        .map(parse_color)
+        .transpose()?
+        .unwrap_or(parse_color(&palette.accent)?);
+    let paper = mix_color(dark, text, 0.94);
+    let ink = mix_color(dark, Rgba([0, 0, 0, 255]), 0.35);
+    let margin = (width as f32 * 0.064) as i32;
+    let wide = width as f32 / height as f32 > 0.62;
+
+    let mut canvas = match frame.composition {
+        Composition::EditorialHero | Composition::SynthesisDark => {
+            gradient(width, height, dark, dark_end)
+        }
+        Composition::EditorialSplit | Composition::ChapterField => {
+            RgbaImage::from_pixel(width, height, paper)
+        }
+        Composition::Legacy => unreachable!("legacy composition uses the legacy renderer"),
+    };
+
+    match frame.composition {
+        Composition::EditorialHero => {
+            draw_art_brand(&mut canvas, font, brand, frame, margin, text, muted);
+            let copy_bottom = draw_art_copy(
+                &mut canvas,
+                font,
+                frame,
+                margin,
+                (height as f32 * 0.14) as i32,
+                (width as f32 * if wide { 0.43 } else { 0.82 }) as u32,
+                text,
+                muted,
+                accent,
+            );
+            draw_art_decoration(
+                &mut canvas,
+                frame.decoration,
+                accent,
+                dark_end,
+                (margin, copy_bottom + (height as f32 * 0.035) as i32),
+            );
+            let (max_width, max_height, x, y) = if wide {
+                let max_width = (width as f32 * 0.45) as u32;
+                let max_height = (height as f32 * 0.84) as u32;
+                let fitted = fit_image(source, max_width, max_height);
+                (
+                    max_width,
+                    max_height,
+                    width as i32 - fitted.width() as i32 - margin,
+                    (height.saturating_sub(fitted.height()) / 2) as i32,
+                )
+            } else {
+                (
+                    (width as f32 * 0.82) as u32,
+                    (height as f32 * 0.62) as u32,
+                    0,
+                    (height as f32 * 0.37) as i32,
+                )
+            };
+            let fitted = fit_image(source, max_width, max_height);
+            let target_x = if wide {
+                x
+            } else {
+                ((width - fitted.width()) / 2) as i32
+            };
+            paste_device(
+                &mut canvas,
+                &fitted,
+                target_x,
+                y,
+                (width as f32 * 0.015) as u32,
+                accent,
+            );
+        }
+        Composition::EditorialSplit => {
+            let circle_radius = (width as f32 * 0.23) as i32;
+            draw_filled_circle_mut(
+                &mut canvas,
+                (width as i32 - circle_radius / 3, circle_radius / 2),
+                circle_radius,
+                mix_color(paper, accent, 0.82),
+            );
+            draw_art_brand(&mut canvas, font, brand, frame, margin, ink, muted);
+            let copy_width = if wide { 0.42 } else { 0.82 };
+            let copy_bottom = draw_art_copy(
+                &mut canvas,
+                font,
+                frame,
+                margin,
+                (height as f32 * 0.14) as i32,
+                (width as f32 * copy_width) as u32,
+                ink,
+                mix_color(ink, paper, 0.42),
+                accent,
+            );
+            draw_art_decoration(
+                &mut canvas,
+                frame.decoration,
+                accent,
+                paper,
+                (
+                    margin,
+                    copy_bottom + (height as f32 * if wide { 0.045 } else { 0.025 }) as i32,
+                ),
+            );
+            let (max_width, max_height, y) = if wide {
+                (
+                    (width as f32 * 0.43) as u32,
+                    (height as f32 * 0.82) as u32,
+                    (height as f32 * 0.11) as i32,
+                )
+            } else {
+                (
+                    (width as f32 * 0.78) as u32,
+                    (height as f32 * 0.60) as u32,
+                    (height as f32 * 0.39) as i32,
+                )
+            };
+            let fitted = fit_image(source, max_width, max_height);
+            let x = if wide {
+                width as i32 - fitted.width() as i32 - margin
+            } else {
+                ((width - fitted.width()) / 2) as i32
+            };
+            paste_device(
+                &mut canvas,
+                &fitted,
+                x,
+                y,
+                (width as f32 * 0.015) as u32,
+                accent,
+            );
+        }
+        Composition::ChapterField => {
+            let field_height = (height as f32 * 0.51) as i32;
+            draw_filled_rect_mut(
+                &mut canvas,
+                Rect::at(0, 0).of_size(width, field_height as u32),
+                accent,
+            );
+            draw_polygon_mut(
+                &mut canvas,
+                &[
+                    Point::new((width as f32 * 0.74) as i32, 0),
+                    Point::new(width as i32, 0),
+                    Point::new(width as i32, field_height),
+                    Point::new((width as f32 * 0.48) as i32, field_height),
+                ],
+                paper,
+            );
+            let index_text = format!("{:02}", frame.index);
+            draw_text_mut(
+                &mut canvas,
+                mix_color(paper, accent, 0.18),
+                (width as f32 * 0.73) as i32,
+                (height as f32 * 0.10) as i32,
+                PxScale::from(width as f32 * 0.22),
+                font,
+                &index_text,
+            );
+            draw_art_decoration(
+                &mut canvas,
+                frame.decoration,
+                accent,
+                paper,
+                ((width as f32 * 0.72) as i32, (height as f32 * 0.31) as i32),
+            );
+            draw_art_brand(
+                &mut canvas,
+                font,
+                brand,
+                frame,
+                margin,
+                paper,
+                mix_color(paper, accent, 0.25),
+            );
+            draw_art_copy(
+                &mut canvas,
+                font,
+                frame,
+                margin,
+                (height as f32 * 0.145) as i32,
+                (width as f32 * 0.58) as u32,
+                paper,
+                mix_color(paper, accent, 0.20),
+                paper,
+            );
+            let fitted = fit_image(
+                source,
+                (width as f32 * if wide { 0.74 } else { 0.86 }) as u32,
+                (height as f32 * 0.34) as u32,
+            );
+            let x = ((width - fitted.width()) / 2) as i32;
+            let y = (height as f32 * 0.405) as i32;
+            paste_device(
+                &mut canvas,
+                &fitted,
+                x,
+                y,
+                (width as f32 * 0.014) as u32,
+                accent,
+            );
+            let footer_y = (y + fitted.height() as i32 + (height as f32 * 0.065) as i32)
+                .min((height as f32 * 0.82) as i32);
+            draw_line_segment_mut(
+                &mut canvas,
+                (margin as f32, footer_y as f32),
+                ((width as i32 - margin) as f32, footer_y as f32),
+                mix_color(paper, ink, 0.28),
+            );
+            draw_text_mut(
+                &mut canvas,
+                accent,
+                margin,
+                footer_y + (height as f32 * 0.022) as i32,
+                PxScale::from(width as f32 * 0.018),
+                font,
+                frame.role.id(),
+            );
+            draw_text_mut(
+                &mut canvas,
+                ink,
+                margin,
+                footer_y + (height as f32 * 0.052) as i32,
+                PxScale::from(width as f32 * 0.036),
+                font,
+                &frame.footer,
+            );
+        }
+        Composition::SynthesisDark => {
+            draw_art_brand(&mut canvas, font, brand, frame, margin, text, muted);
+            draw_art_copy(
+                &mut canvas,
+                font,
+                frame,
+                margin,
+                (height as f32 * 0.14) as i32,
+                (width as f32 * if wide { 0.42 } else { 0.82 }) as u32,
+                text,
+                muted,
+                accent,
+            );
+            draw_art_decoration(
+                &mut canvas,
+                frame.decoration,
+                accent,
+                dark_end,
+                (margin, (height as f32 * 0.62) as i32),
+            );
+            let fitted = fit_image(
+                source,
+                (width as f32 * if wide { 0.45 } else { 0.76 }) as u32,
+                (height as f32 * if wide { 0.82 } else { 0.61 }) as u32,
+            );
+            let x = width as i32 - fitted.width() as i32 - margin;
+            let y = if wide {
+                (height.saturating_sub(fitted.height()) / 2) as i32
+            } else {
+                (height as f32 * 0.37) as i32
+            };
+            paste_device(
+                &mut canvas,
+                &fitted,
+                x,
+                y,
+                (width as f32 * 0.015) as u32,
+                accent,
+            );
+        }
+        Composition::Legacy => unreachable!(),
+    }
+    Ok(canvas)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_art_copy(
+    canvas: &mut RgbaImage,
+    font: &FontArc,
+    frame: &FramePlan,
+    x: i32,
+    y: i32,
+    max_width: u32,
+    headline_color: Rgba<u8>,
+    body_color: Rgba<u8>,
+    label_color: Rgba<u8>,
+) -> i32 {
+    let width = canvas.width();
+    let height = canvas.height();
+    let label_scale = PxScale::from(width as f32 * 0.019);
+    draw_text_mut(canvas, label_color, x, y, label_scale, font, &frame.badge);
+    let headline_scale = PxScale::from(width as f32 * if width > 1600 { 0.052 } else { 0.064 });
+    let headline_lines = wrap_text(font, headline_scale, &frame.headline, max_width, 2);
+    let after_headline = draw_lines(
+        canvas,
+        font,
+        headline_scale,
+        headline_color,
+        x,
+        y + (height as f32 * 0.043) as i32,
+        &headline_lines,
+        1.10,
+    );
+    let body_scale = PxScale::from(width as f32 * 0.024);
+    let body_lines = wrap_text(font, body_scale, &frame.body, max_width, 2);
+    let after_body = draw_lines(
+        canvas,
+        font,
+        body_scale,
+        body_color,
+        x,
+        after_headline + (height as f32 * 0.019) as i32,
+        &body_lines,
+        1.24,
+    );
+    if !frame.chips.is_empty() {
+        draw_text_mut(
+            canvas,
+            label_color,
+            x,
+            after_body + (height as f32 * 0.018) as i32,
+            PxScale::from(width as f32 * 0.019),
+            font,
+            &frame.chips.join("  ·  "),
+        );
+    }
+    after_body
+}
+
+fn draw_art_brand(
+    canvas: &mut RgbaImage,
+    font: &FontArc,
+    brand: &str,
+    frame: &FramePlan,
+    margin: i32,
+    color: Rgba<u8>,
+    muted: Rgba<u8>,
+) {
+    let width = canvas.width();
+    let height = canvas.height();
+    draw_text_mut(
+        canvas,
+        color,
+        margin,
+        (height as f32 * 0.035) as i32,
+        PxScale::from(width as f32 * 0.026),
+        font,
+        brand,
+    );
+    draw_text_mut(
+        canvas,
+        muted,
+        margin,
+        (height as f32 * 0.066) as i32,
+        PxScale::from(width as f32 * 0.014),
+        font,
+        frame.role.id(),
+    );
+    let number = format!("{:02}", frame.index);
+    let number_width = text_size(PxScale::from(width as f32 * 0.018), font, &number).0 as i32;
+    draw_text_mut(
+        canvas,
+        muted,
+        width as i32 - margin - number_width,
+        (height as f32 * 0.045) as i32,
+        PxScale::from(width as f32 * 0.018),
+        font,
+        &number,
+    );
+}
+
+fn draw_art_decoration(
+    canvas: &mut RgbaImage,
+    decoration: Decoration,
+    accent: Rgba<u8>,
+    background: Rgba<u8>,
+    anchor: (i32, i32),
+) {
+    let width = canvas.width() as f32;
+    let height = canvas.height() as f32;
+    let (x, y) = anchor;
+    match decoration {
+        Decoration::None => {}
+        Decoration::Spectrum => {
+            let bar_width = (width * 0.065) as u32;
+            let bar_height = (height * 0.004).max(4.0) as u32;
+            for index in 0..5 {
+                draw_filled_rect_mut(
+                    canvas,
+                    Rect::at(x + index * (bar_width as i32 + 7), y).of_size(bar_width, bar_height),
+                    mix_color(background, accent, 0.36 + index as f32 * 0.12),
+                );
+            }
+        }
+        Decoration::Orbit => {
+            let center = (x + (width * 0.10) as i32, y + (height * 0.035) as i32);
+            for index in 1..=3 {
+                draw_hollow_circle_mut(
+                    canvas,
+                    center,
+                    (width * (0.035 + index as f32 * 0.025)) as i32,
+                    mix_color(background, accent, 0.18 + index as f32 * 0.12),
+                );
+            }
+            draw_line_segment_mut(
+                canvas,
+                (
+                    center.0 as f32 - width * 0.10,
+                    center.1 as f32 + height * 0.02,
+                ),
+                (
+                    center.0 as f32 + width * 0.13,
+                    center.1 as f32 - height * 0.025,
+                ),
+                mix_color(background, accent, 0.55),
+            );
+        }
+        Decoration::Grid => {
+            for index in 0..5 {
+                let offset = index as f32 * height * 0.012;
+                draw_line_segment_mut(
+                    canvas,
+                    (x as f32, y as f32 + offset),
+                    (x as f32 + width * 0.23, y as f32 - height * 0.035 + offset),
+                    mix_color(background, accent, 0.22 + index as f32 * 0.07),
+                );
+            }
+        }
+        Decoration::Signal => {
+            for index in 0..6 {
+                let line_width = width * (0.045 + (index % 3) as f32 * 0.025);
+                let line_y = y as f32 + index as f32 * height * 0.013;
+                draw_line_segment_mut(
+                    canvas,
+                    (x as f32, line_y),
+                    (x as f32 + line_width, line_y),
+                    mix_color(background, accent, 0.34 + index as f32 * 0.07),
+                );
+            }
+        }
+    }
+}
+
+fn mix_color(base: Rgba<u8>, overlay: Rgba<u8>, amount: f32) -> Rgba<u8> {
+    let amount = amount.clamp(0.0, 1.0);
+    Rgba([
+        lerp(base[0], overlay[0], amount),
+        lerp(base[1], overlay[1], amount),
+        lerp(base[2], overlay[2], amount),
+        255,
+    ])
 }
 
 fn render_feature(
@@ -1269,6 +2039,38 @@ fn layout_from_id(value: &str) -> Result<Layout> {
     }
 }
 
+fn story_role_from_id(value: &str) -> Result<StoryRole> {
+    match value {
+        "hero" => Ok(StoryRole::Hero),
+        "overview" => Ok(StoryRole::Overview),
+        "detail" => Ok(StoryRole::Detail),
+        "proof" => Ok(StoryRole::Proof),
+        "synthesis" => Ok(StoryRole::Synthesis),
+        _ => anyhow::bail!("unsupported story role: {value}"),
+    }
+}
+
+fn composition_from_id(value: &str) -> Result<Composition> {
+    match value {
+        "editorial_hero" => Ok(Composition::EditorialHero),
+        "editorial_split" => Ok(Composition::EditorialSplit),
+        "chapter_field" => Ok(Composition::ChapterField),
+        "synthesis_dark" => Ok(Composition::SynthesisDark),
+        _ => anyhow::bail!("unsupported composition: {value}"),
+    }
+}
+
+fn decoration_from_id(value: &str) -> Result<Decoration> {
+    match value {
+        "none" => Ok(Decoration::None),
+        "spectrum" => Ok(Decoration::Spectrum),
+        "orbit" => Ok(Decoration::Orbit),
+        "grid" => Ok(Decoration::Grid),
+        "signal" => Ok(Decoration::Signal),
+        _ => anyhow::bail!("unsupported decoration: {value}"),
+    }
+}
+
 fn list_or_none(values: &[String]) -> String {
     if values.is_empty() {
         "none supplied".to_string()
@@ -1308,6 +2110,62 @@ mod tests {
     }
 
     #[test]
+    fn art_direction_recipes_create_story_rhythm() {
+        let generation = Generation {
+            brand_name: "Test".into(),
+            tagline: String::new(),
+            source_target: "phone".into(),
+            frame_count: 5,
+            generator_backend: "openrouter".into(),
+            generator_model: "test".into(),
+            style_direction: String::new(),
+            palette: vec![
+                "#000000".into(),
+                "#111111".into(),
+                "#5555FF".into(),
+                "#FFFFFF".into(),
+            ],
+            allowed_layouts: vec!["ui_dominant".into()],
+            creative_families: vec!["product_led".into()],
+            art_direction: crate::spec::ArtDirection {
+                story_roles: Vec::new(),
+                allowed_compositions: vec![
+                    "editorial_hero".into(),
+                    "editorial_split".into(),
+                    "chapter_field".into(),
+                    "synthesis_dark".into(),
+                ],
+                allowed_decorations: vec![
+                    "spectrum".into(),
+                    "orbit".into(),
+                    "grid".into(),
+                    "signal".into(),
+                ],
+                frame_accents: vec!["#5555FF".into(), "#22AA77".into()],
+                max_consecutive_same_composition: 2,
+                min_unique_compositions: 3,
+            },
+            segments: Vec::new(),
+            verified_claim_tokens: Vec::new(),
+        };
+
+        let recipes = frame_recipes(&generation, 0).unwrap();
+        assert_eq!(recipes[0].role, StoryRole::Hero);
+        assert_eq!(recipes[1].role, StoryRole::Overview);
+        assert_eq!(recipes[4].role, StoryRole::Synthesis);
+        assert_eq!(recipes[0].composition, Composition::EditorialHero);
+        assert_eq!(recipes[4].composition, Composition::SynthesisDark);
+        assert!(
+            recipes
+                .iter()
+                .map(|recipe| recipe.composition)
+                .collect::<HashSet<_>>()
+                .len()
+                >= 3
+        );
+    }
+
+    #[test]
     fn normalized_plans_cannot_escape_candidate_directory() {
         let generation = Generation {
             brand_name: "Test".into(),
@@ -1325,6 +2183,7 @@ mod tests {
             ],
             allowed_layouts: vec!["device_bottom".into()],
             creative_families: vec!["product_led".into()],
+            art_direction: Default::default(),
             segments: Vec::new(),
             verified_claim_tokens: Vec::new(),
         };
@@ -1355,6 +2214,11 @@ mod tests {
                 body: "body".into(),
                 chips: vec![],
                 layout: Layout::DeviceBottom,
+                role: StoryRole::Legacy,
+                composition: Composition::Legacy,
+                decoration: Decoration::None,
+                accent: None,
+                footer: "payoff".into(),
             }],
             feature: FeaturePlan {
                 headline: "headline".into(),
@@ -1386,6 +2250,7 @@ mod tests {
             ],
             allowed_layouts: vec!["ui_dominant".into()],
             creative_families: vec!["product_led".into()],
+            art_direction: Default::default(),
             segments: Vec::new(),
             verified_claim_tokens: Vec::new(),
         };
@@ -1416,6 +2281,11 @@ mod tests {
                 body: "body".into(),
                 chips: vec![],
                 layout: Layout::UiDominant,
+                role: StoryRole::Legacy,
+                composition: Composition::Legacy,
+                decoration: Decoration::None,
+                accent: None,
+                footer: "payoff".into(),
             }],
             feature: FeaturePlan {
                 headline: "headline".into(),
