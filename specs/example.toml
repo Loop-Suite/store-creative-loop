@@ -14,6 +14,17 @@ thumbnail_width = 220
 critic_backends = ["claude", "openrouter", "claude"]
 openrouter_critic_model = "openai/gpt-4.1-mini"
 
+[generation]
+brand_name = "Example"
+tagline = "One clear story across every device"
+source_target = "apple_iphone_65_ko"
+frame_count = 3
+generator_backend = "openrouter"
+generator_model = "openai/gpt-4.1-mini"
+style_direction = "Confident, product-led, high contrast, minimal decoration, and readable at store thumbnail scale."
+palette = ["#0B1020", "#182748", "#64E4D2", "#F8F9FC", "#BEC2CF"]
+allowed_layouts = ["device_bottom", "device_center", "ui_focus"]
+
 [[targets]]
 id = "apple_iphone_65_ko"
 store = "apple"
@@ -48,7 +59,7 @@ kind = "screenshot"
 required = true
 min_assets = 2
 max_assets = 8
-# With no allowed_sizes, Google Play's general 320–3840 px / 2:1 geometry gate applies.
+allowed_sizes = [{ width = 1080, height = 1920 }]
 
 [[targets]]
 id = "google_feature_ko"

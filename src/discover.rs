@@ -354,6 +354,7 @@ mod tests {
                 name: "User".into(),
                 instruction: "inspect".into(),
             }],
+            generation: None,
             experiment: Experiment::default(),
         }
     }
