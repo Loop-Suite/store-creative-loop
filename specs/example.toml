@@ -131,6 +131,12 @@ weight = 1.0
 guide = "Are copy, product UI, contrast, spacing, and focal points legible without visual competition?"
 
 [[criteria]]
+id = "series_consistency"
+name = "Series consistency"
+weight = 1.1
+guide = "Do counters, badges, icons, dividers, cards, and motifs follow a repeated visual rule, with every one-off element serving a clear frame-specific purpose?"
+
+[[criteria]]
 id = "truth_trust"
 name = "Truth and trust"
 weight = 1.4

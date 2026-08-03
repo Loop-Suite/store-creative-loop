@@ -33,8 +33,8 @@ Given a TOML spec (targets, review criteria, critic lenses, and an optional `[ge
 
 1. **Validates** every candidate's screenshots/feature graphics against deterministic file and platform-policy gates (decoding, exact pixel dimensions, transparency, asset counts, duplicate/near-duplicate detection).
 2. **Anonymizes** the candidates that pass into blind, thumbnail-scale contact sheets and reviews them with several independent, non-communicating LLM-backed critics, each assigned a distinct review lens and a rotated candidate order to reduce anchoring and position bias.
-3. **Aggregates** the critics' rankings and 1–5 rubric scores with local, deterministic arithmetic — Borda count, per-criterion means, and a corroboration threshold that only promotes a risk finding once at least two independent critics reported it.
-4. **Hands off** the offline winner to a pre-registered Apple Product Page Optimization / Google Play Store Listing Experiment template, and (optionally) feeds the round's criterion means, corroborated risks, and minority opinions back into the next generation round.
+3. **Audits and aggregates** the critics' rankings, 1–5 rubric scores, and visual grammar with local, deterministic arithmetic — Borda count, per-criterion means, and a two-reviewer corroboration threshold for both target-specific findings and unexplained one-off overlays.
+4. **Hands off** only a series-consistent offline winner to a pre-registered Apple Product Page Optimization / Google Play Store Listing Experiment template, and feeds criterion means, corroborated risks, series repairs, and minority opinions into the next generation round.
 
 ## Pipeline overview
 
@@ -50,9 +50,12 @@ flowchart TB
     Val -->|"PASS"| Blind["contact_sheet::build_contact_sheets<br/>blind ids + thumbnails"]
     Blind --> Crit["storeloop review<br/>N independent blind critics"]
     Crit --> Unbl["critique::unblind"]
-    Unbl --> Quant["quantify::quantify<br/>Borda count + corroborated risks"]
-    Quant --> Rep["report.md<br/>offline recommendation"]
-    Quant --> Hand["experiment.md<br/>Apple / Google handoff"]
+    Unbl --> Audit["series-consistency audit<br/>recurring systems + one-off exceptions"]
+    Audit --> Quant["quantify::quantify<br/>Borda count + corroborated repairs"]
+    Quant --> Repair{"unresolved series<br/>exception?"}
+    Repair -->|"yes"| Plan
+    Repair -->|"no"| Rep["report.md<br/>offline recommendation"]
+    Repair -->|"no"| Hand["experiment.md<br/>Apple / Google handoff"]
     Rep -->|"storeloop generate:<br/>feedback into next round"| Plan
     Rep -->|"storeloop refine --prior state.json"| Refn["compare_prior<br/>NEW / STILL_OPEN / NOT_REOBSERVED"]
     Hand --> Market["Apple Product Page Optimization /<br/>Google Play Store Listing Experiments"]
@@ -111,10 +114,10 @@ flowchart TD
 | `src/discover.rs` | Decodes candidate images and applies deterministic policy gates; produces `hard_pass` |
 | `src/contact_sheet.rs` | Renders blind thumbnail contact sheets and assigns anonymous `candidate_NN` ids |
 | `src/llm.rs` | Vision-call adapter for the Claude CLI and OpenRouter (ported from `icon-loop`) |
-| `src/critique.rs` | Builds each critic's blind, rotated-order prompt and validates the returned JSON schema |
-| `src/generation.rs` | LLM creative planning (`generate_plans`) and the deterministic PNG renderer (`render_plans`) |
-| `src/quantify.rs` | Borda-count aggregation, per-criterion means, corroborated-risk grouping |
-| `src/report.rs` | Renders `report.md` (offline recommendation) and `experiment.md` (handoff template) |
+| `src/critique.rs` | Builds each critic's blind, rotated-order prompt and validates findings plus the structured series-consistency audit |
+| `src/generation.rs` | LLM creative planning (`generate_plans`) with a visual-grammar contract and the deterministic PNG renderer (`render_plans`) |
+| `src/quantify.rs` | Borda-count aggregation, per-criterion means, target-specific risk grouping, and candidate-level series repair gating |
+| `src/report.rs` | Renders `report.md` (offline recommendation and repair evidence) and `experiment.md` (handoff template) |
 | `src/state.rs` | Reads/writes `state.json`, the full round record consumed by `refine` |
 | `src/models.rs` | Shared serde types: `Candidate`, `CritiqueRound`, `QuantResult`, `State`, etc. |
 
@@ -127,12 +130,12 @@ flowchart TB
         Discover["discover::discover_candidates<br/>decode, sha256, dimensions,<br/>transparency, platform limits, duplicates"]
         Render["generation::render_plans<br/>ab_glyph + imageproc canvas draw"]
         Sheets["contact_sheet::build_contact_sheets<br/>blind ids, thumbnails"]
-        Quant["quantify::quantify<br/>Borda arithmetic, criterion means,<br/>corroboration (2+ reviewers), unanimity warning"]
+        Quant["quantify::quantify<br/>Borda arithmetic, criterion means,<br/>corroboration + series repair gate"]
         Report["report::render_report / render_experiment<br/>markdown templates"]
     end
     subgraph Model["Model-assisted judgment — Claude CLI or OpenRouter"]
         Plan["generation::generate_plans<br/>headline, body, chips, layout,<br/>story role, composition, decoration"]
-        Critic["critique::run_one<br/>first_glance, sequence_read,<br/>1-5 criteria scores, findings, ranking"]
+        Critic["critique::run_one<br/>scores, findings, ranking,<br/>recurring-overlay audit"]
     end
     subgraph External["External market validation — not code"]
         Experiment["Apple Product Page Optimization /<br/>Google Play Store Listing Experiments"]
@@ -154,6 +157,8 @@ Safeguards this boundary enforces:
 - `spec.prohibited_claims` (exact substrings) and a fixed trust-marker list (`#1`, `최고`, `award`, ratings/stars, `%`, `guarantee`, download-count language, …) are checked against every LLM-generated plan in `generation::validate_copy_claims` **before rendering**; a trust marker is only allowed if the exact token is present in `generation.verified_claim_tokens`.
 - A candidate with any `BLOCK`-severity policy issue cannot become the Borda winner, regardless of critic preference.
 - Critics never see each other's ranking, scores, or identity; a risk needs two independent critics before it is reported as `corroborated`.
+- Every critic must inventory recurring non-product overlays and name unexplained one-offs. Two warnings against one candidate create a repair gate independent of target wording.
+- A candidate with a corroborated series-consistency risk is excluded from final handoff until the element is removed or turned into one complete, consistently styled system.
 - `NOT_REOBSERVED` (see below) never silently means "fixed."
 - Every `report.md` and `experiment.md` states the verdict boundary: an offline, model-assisted recommendation, not market validation.
 
@@ -278,7 +283,7 @@ flowchart TB
         D --> F["pick lens:<br/>spec.lenses[index % len]"]
         E --> G["llm.json_with_images(prompt, contact sheets)"]
         F --> G
-        G --> H{"validate_response:<br/>full coverage, 1-5 range,<br/>known target ids?"}
+        G --> H{"validate_response:<br/>full coverage, 1-5 range,<br/>known targets + series audit?"}
         H -->|"no, up to 3 attempts"| G
         H -->|"yes"| I["CritiqueRound<br/>(still blind ids)"]
     end
@@ -287,9 +292,9 @@ flowchart TB
     J --> K["quantify::quantify"]
 ```
 
-Each critic is built from `spec.lenses` and `spec.critic_backends` (cycled by index) and asked to score every candidate against `spec.criteria` on a 1–5 scale, plus report `findings` (category, target, frame, severity, evidence, suggested fix), a one-line `first_glance`/`sequence_read`/`strongest_point`/`biggest_risk`, and a complete, tie-free `ranking`. `critique::run_one` retries the request up to 3 times with an explicit correction prompt if the JSON fails schema or coverage validation (missing candidates, out-of-range scores, unknown target ids, incomplete rankings).
+Each critic is built from `spec.lenses` and `spec.critic_backends` (cycled by index) and asked to score every candidate against `spec.criteria` on a 1–5 scale, plus report `findings` (category, target, frame, severity, evidence, suggested fix), a one-line `first_glance`/`sequence_read`/`strongest_point`/`biggest_risk`, and a complete, tie-free `ranking`. Every response must also include `series_consistency`: recurring overlay systems, unexplained exceptions, visible evidence, severity, and a concrete repair. A lone numeral, counter, badge, icon, divider, card, or motif is a warning unless its frame-specific role is visibly clear. `critique::run_one` retries the request up to 3 times with an explicit correction prompt if the JSON fails schema or coverage validation.
 
-`specs/example.toml` ships 6 lenses (`first_time_user`, `conversion_strategy`, `visual_design`, `trust_policy`, `accessibility_localization`, `device_specialist`) and 7 weighted criteria (`first_glance`, `value_clarity`, `sequence`, `visual_hierarchy`, `truth_trust`, `device_fit`, `localization_accessibility`). Criterion `weight` is shown to critics as emphasis guidance inside the prompt; the deterministic aggregation in `quantify.rs` does not itself apply numeric weighting — it works directly from rank order (Borda) and unweighted 1–5 score means.
+`specs/example.toml` ships 6 lenses (`first_time_user`, `conversion_strategy`, `visual_design`, `trust_policy`, `accessibility_localization`, `device_specialist`) and 8 weighted criteria (`first_glance`, `value_clarity`, `sequence`, `visual_hierarchy`, `series_consistency`, `truth_trust`, `device_fit`, `localization_accessibility`). Criterion `weight` is shown to critics as emphasis guidance inside the prompt; the deterministic aggregation in `quantify.rs` does not itself apply numeric weighting — it works directly from rank order (Borda) and unweighted 1–5 score means.
 
 ## Stage 3 — Verdict: deterministic aggregation
 
@@ -301,8 +306,9 @@ Each critic is built from `spec.lenses` and `spec.critic_backends` (cycled by in
 - **Unanimous-first-choice warning** — set when every critic's top-ranked candidate is the same, framed as a correlation warning, not proof.
 - **Minority opinions** — one line per critic whose first choice differs from the overall winner.
 - **Corroborated risks** — `findings` are grouped by `(candidate, category, target, frame)`; a group is only promoted to `corroborated_risks` once at least two distinct critics reported it, with the evidence and the maximum reported severity attached.
+- **Series-consistency repairs** — `series_consistency` warnings are grouped by candidate rather than target wording. Two distinct critics make that candidate repair-required, preserve their exceptions/evidence/fixes, and remove it from winner selection.
 
-A `BLOCK`-severity candidate from Stage 1 is excluded from `eligible` before any of this runs, so it can never win regardless of critic preference.
+A `BLOCK`-severity candidate from Stage 1 is excluded before aggregation. A candidate with a corroborated series-consistency risk may seed an intermediate repair round only when every variant is flagged; it cannot produce the final handoff.
 
 ## Stage 4 — Experiment handoff
 
@@ -317,7 +323,7 @@ A `BLOCK`-severity candidate from Stage 1 is excluded from `eligible` before any
 
 ## Iterating: refine and the corroborated-risk lifecycle
 
-`storeloop refine --prior <round's state.json>` runs the same validate → critique → verdict pipeline as `review`, then `main.rs::compare_prior` diffs the new round's `corroborated_risks` against the prior round's by `(candidate, category, target, frame)` key:
+`storeloop refine --prior <round's state.json>` runs the same validate → critique → verdict pipeline as `review`, then `main.rs::compare_prior` diffs both target-specific `corroborated_risks` and candidate-level series repairs. Series repairs use the stable synthetic key `(candidate, series_consistency, all, all)`:
 
 ```mermaid
 stateDiagram-v2
@@ -334,7 +340,7 @@ stateDiagram-v2
         NOT_REOBSERVED never means "fixed" --
         only that this round's independent
         panel did not reproduce the same
-        (candidate, category, target, frame) key.
+        target-specific or series-consistency key.
     end note
 ```
 
@@ -342,15 +348,15 @@ stateDiagram-v2
 
 ## Generation loop: creative families and art direction
 
-`storeloop generate` runs `iterations` rounds. Each round: pick the segment (`--segment`, default `default`, or an id from `[[generation.segments]]`) → ask the configured LLM backend (`generation.generator_backend`: `claude` or `openrouter`) for `variants` creative plans → validate and normalize them (`generation::normalize_and_validate`) → render deterministically → run the full review pipeline → extract feedback (winning plan, its criterion means, corroborated risks, minority opinions) → feed that feedback into the next round's prompt. The final round's winning PNGs are copied to `final/`, alongside `winner.json` and `summary.md`.
+`storeloop generate` runs `iterations` rounds. Each round: pick the segment (`--segment`, default `default`, or an id from `[[generation.segments]]`) → ask the configured LLM backend (`generation.generator_backend`: `claude` or `openrouter`) for `variants` creative plans → validate and normalize them (`generation::normalize_and_validate`) → render deterministically → run the full review pipeline → extract feedback (winning plan, criterion means, target-specific risks, candidate-level series repairs, minority opinions) → feed that feedback into the next round's prompt. If every intermediate variant is flagged, the highest Borda candidate is only a repair seed. An unresolved final round fails instead of copying misleading assets to `final/`.
 
-Each plan is assigned one of three **creative families**, cycled across variants: `product_led` (real UI dominant, demonstrates a concrete task), `outcome_led` (leads with the user's desired outcome or emotion), `trust_led` (clarity and control without invented social proof). Frames get a **story role** (`hero → overview → detail/proof → synthesis` by default, or an explicit `story_roles` list matching `frame_count`), each role prefers a matching **composition** (`editorial_hero`, `editorial_split`, `chapter_field`, `synthesis_dark`) and a rotating **decoration** (`spectrum`, `orbit`, `grid`, `signal`); `max_consecutive_same_composition` and `min_unique_compositions` gate against a flat, repetitive sequence. The planner writes copy into these deterministic recipes — it cannot collapse the set back into identical centered-device frames, and older manifests without the new art-direction fields still render through the legacy composition.
+Each plan is assigned one of three **creative families**, cycled across variants: `product_led` (real UI dominant, demonstrates a concrete task), `outcome_led` (leads with the user's desired outcome or emotion), `trust_led` (clarity and control without invented social proof). Frames get a **story role** (`hero → overview → detail/proof → synthesis` by default, or an explicit `story_roles` list matching `frame_count`), each role prefers a matching **composition** (`editorial_hero`, `editorial_split`, `chapter_field`, `synthesis_dark`) and a rotating **decoration** (`spectrum`, `orbit`, `grid`, `signal`); `max_consecutive_same_composition` and `min_unique_compositions` gate against a flat, repetitive sequence. The planner writes copy into these deterministic recipes — it cannot collapse the set back into identical centered-device frames, and older manifests without the new art-direction fields still render through the legacy composition. Its visual-grammar contract forbids isolated decorative numerals, counters, badges, icons, dividers, or cards; a counter must be a complete sequence with consistent placement, scale, and style.
 
 `verified_claim_tokens` is empty by default: rankings, awards, ratings, star/percentage language, guarantees, and download-count superlatives are rejected by `generation::validate_copy_claims` unless the exact supporting token is explicitly allowlisted, in addition to the free-text `prohibited_claims` substring check.
 
 ## Spec file (`specs/example.toml`)
 
-`specs/example.toml` is the starting point. It declares: brand, style direction, a 5-color palette, allowed layouts, the three creative families, two audience segments (`new_user`, `power_user`), the art-direction recipe set, an empty `verified_claim_tokens` allowlist, product truths and prohibited claims, the generator/critic model backends, 5 store targets, 7 scored criteria, 6 critic lenses, and experiment guardrails. Its Apple targets use the current 6.9-inch iPhone (`1260×2736`) and 13-inch iPad (`2064×2752` or `2048×2732`) portrait masters; its Google targets are phone (`1080×1920`), tablet (`1600×2560`), and the feature graphic (`1024×500`, exactly one asset). Platform requirements change — re-check Apple's and Google's current specifications before submission.
+`specs/example.toml` is the starting point. It declares: brand, style direction, a 5-color palette, allowed layouts, the three creative families, two audience segments (`new_user`, `power_user`), the art-direction recipe set, an empty `verified_claim_tokens` allowlist, product truths and prohibited claims, the generator/critic model backends, 5 store targets, 8 scored criteria, 6 critic lenses, and experiment guardrails. Its Apple targets use the current 6.9-inch iPhone (`1260×2736`) and 13-inch iPad (`2064×2752` or `2048×2732`) portrait masters; its Google targets are phone (`1080×1920`), tablet (`1600×2560`), and the feature graphic (`1024×500`, exactly one asset). Platform requirements change — re-check Apple's and Google's current specifications before submission.
 
 ## Raw capture convention
 
@@ -379,7 +385,7 @@ Add a folder named after any other screenshot target id to supply real device-sp
 - `round-NN/generation.json` — selected segment, per-target source manifest, creative family, hypothesis id, story role/composition/decoration/accent, editable copy, and generation provenance.
 - `round-NN/candidates/` — rendered phone, tablet, and feature-graphic PNG variants.
 - `round-NN/review/state.json` — policy evidence, blind map, every critic's raw response, quantified arithmetic, and risk state (`State` from `models.rs`).
-- `round-NN/review/report.md` — offline recommendation, dissent, provider notes, and corroborated risks.
+- `round-NN/review/report.md` — offline recommendation, dissent, provider notes, target-specific risks, and series-consistency repair evidence.
 - `round-NN/review/experiment.md` — Apple/Google experiment pre-registration handoff.
 - `final/` — the final round's winning PNG set.
 - `winner.json` / `summary.md` — the selected creative plan and a concise run summary.

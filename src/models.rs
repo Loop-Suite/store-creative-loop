@@ -71,6 +71,30 @@ pub struct VisualFinding {
     pub suggested_fix: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SeriesConsistencyAudit {
+    pub severity: Severity,
+    #[serde(default)]
+    pub recurring_elements: Vec<String>,
+    #[serde(default)]
+    pub exceptions: Vec<String>,
+    pub evidence: String,
+    #[serde(default)]
+    pub suggested_fix: String,
+}
+
+impl Default for SeriesConsistencyAudit {
+    fn default() -> Self {
+        Self {
+            severity: Severity::Note,
+            recurring_elements: Vec::new(),
+            exceptions: Vec::new(),
+            evidence: String::new(),
+            suggested_fix: String::new(),
+        }
+    }
+}
+
 fn deserialize_f64_from_number_or_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: Deserializer<'de>,
@@ -120,6 +144,8 @@ pub struct CandidateCritique {
     pub biggest_risk: String,
     pub criteria: Vec<CriterionScore>,
     #[serde(default)]
+    pub series_consistency: SeriesConsistencyAudit,
+    #[serde(default)]
     pub findings: Vec<VisualFinding>,
 }
 
@@ -144,6 +170,16 @@ pub struct CorroboratedRisk {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CorroboratedSeriesRisk {
+    pub candidate_id: String,
+    pub reviewers: usize,
+    pub max_severity: Severity,
+    pub exceptions: Vec<String>,
+    pub evidence: Vec<String>,
+    pub suggested_fixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QuantResult {
     pub borda: Vec<(String, u32)>,
     pub winner: Option<String>,
@@ -152,6 +188,8 @@ pub struct QuantResult {
     pub unanimous_warning: Option<String>,
     pub minority_opinions: Vec<String>,
     pub corroborated_risks: Vec<CorroboratedRisk>,
+    #[serde(default)]
+    pub corroborated_series_risks: Vec<CorroboratedSeriesRisk>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
