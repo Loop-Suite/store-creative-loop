@@ -70,7 +70,7 @@ pub fn render_report(spec: &Spec, state: &State) -> String {
         Some(winner) => writeln!(report, "Recommended candidate: **{}**\n", winner).unwrap(),
         None => writeln!(
             report,
-            "No eligible candidate. Resolve policy blocks before visual review.\n"
+            "No eligible candidate. Resolve deterministic policy blocks or corroborated series-consistency repairs before handoff.\n"
         )
         .unwrap(),
     }
@@ -99,6 +99,39 @@ pub fn render_report(spec: &Spec, state: &State) -> String {
             writeln!(report, "- `{criterion}`: {mean:.2}").unwrap();
         }
         writeln!(report).unwrap();
+    }
+
+    writeln!(report, "## Corroborated series-consistency risks\n").unwrap();
+    writeln!(
+        report,
+        "This is a model-assisted visual-grammar gate, separate from deterministic file and platform policy checks.\n"
+    )
+    .unwrap();
+    if state.quant.corroborated_series_risks.is_empty() {
+        writeln!(
+            report,
+            "No unexplained one-off overlay was independently reported by at least two critics.\n"
+        )
+        .unwrap();
+    }
+    for risk in &state.quant.corroborated_series_risks {
+        writeln!(
+            report,
+            "- **{}** — repair required before final handoff; {} reviewers; max severity {}",
+            risk.candidate_id,
+            risk.reviewers,
+            risk.max_severity.label()
+        )
+        .unwrap();
+        for exception in &risk.exceptions {
+            writeln!(report, "  - Exception: {exception}").unwrap();
+        }
+        for evidence in &risk.evidence {
+            writeln!(report, "  - Evidence: {evidence}").unwrap();
+        }
+        for suggested_fix in &risk.suggested_fixes {
+            writeln!(report, "  - Repair: {suggested_fix}").unwrap();
+        }
     }
 
     writeln!(report, "## Corroborated risks\n").unwrap();
@@ -157,8 +190,13 @@ pub fn render_report(spec: &Spec, state: &State) -> String {
         for item in &round.items {
             writeln!(
                 report,
-                "- **{}** — first glance: {} Strongest point: {} Biggest risk: {}",
-                item.candidate_id, item.first_glance, item.strongest_point, item.biggest_risk
+                "- **{}** — first glance: {} Strongest point: {} Biggest risk: {} Series grammar {}: {}",
+                item.candidate_id,
+                item.first_glance,
+                item.strongest_point,
+                item.biggest_risk,
+                item.series_consistency.severity.label(),
+                item.series_consistency.evidence
             )
             .unwrap();
         }
