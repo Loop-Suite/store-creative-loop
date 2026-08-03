@@ -272,11 +272,24 @@ fn run_generation_loop(
         let review_dir = round_dir.join("review");
         run_review(cli, spec_path, &candidates_root, &review_dir, critics, None)?;
         let review_state = state::load(&review_dir.join("state.json"))?;
-        let winner = review_state
-            .quant
-            .winner
-            .clone()
-            .context("generation round produced no eligible winner")?;
+        let winner = match review_state.quant.winner.clone() {
+            Some(winner) => winner,
+            None if round < iterations => {
+                let provisional = review_state
+                    .quant
+                    .borda
+                    .first()
+                    .map(|(candidate, _)| candidate.clone())
+                    .context("generation round produced no provisional candidate")?;
+                eprintln!(
+                    "warning: every candidate needs a series-consistency repair; using {provisional} only as the next-round refinement seed"
+                );
+                provisional
+            }
+            None => anyhow::bail!(
+                "final generation round has no series-consistent winner; inspect review/report.md and run another repaired iteration"
+            ),
+        };
         let winning_plan = plans
             .iter()
             .find(|plan| plan.id == winner)
@@ -334,10 +347,11 @@ fn generation_feedback(state: &State, winner: &generation::CreativePlan) -> Resu
         .cloned()
         .unwrap_or_default();
     Ok(format!(
-        "Previous winner plan:\n{}\n\nWinner criterion means: {}\nCorroborated risks: {}\nMinority opinions: {}\nCreate new variants that preserve proven strengths while each tests one distinct response to these weaknesses. Do not merely paraphrase the previous copy.",
+        "Previous winner plan:\n{}\n\nWinner criterion means: {}\nCorroborated risks: {}\nCorroborated series-consistency risks: {}\nMinority opinions: {}\nCreate new variants that preserve proven strengths while each tests one distinct response to these weaknesses. Treat every corroborated series-consistency risk as an explicit repair directive: remove the unexplained one-off or turn it into one complete, consistently styled system. Do not merely paraphrase the previous copy.",
         serde_json::to_string_pretty(winner)?,
         serde_json::to_string(&criterion_means)?,
         serde_json::to_string(&state.quant.corroborated_risks)?,
+        serde_json::to_string(&state.quant.corroborated_series_risks)?,
         state.quant.minority_opinions.join("; ")
     ))
 }
@@ -476,7 +490,7 @@ fn run_review(
     let quant = quantify::quantify(&candidates, &discourse);
     let prior_observations = prior
         .as_ref()
-        .map(|state| compare_prior(state, &quant.corroborated_risks))
+        .map(|state| compare_prior(state, &quant))
         .unwrap_or_default();
     let round = prior.as_ref().map(|state| state.round + 1).unwrap_or(1);
     let state = State {
@@ -500,7 +514,7 @@ fn run_review(
     Ok(())
 }
 
-fn compare_prior(prior: &State, current: &[models::CorroboratedRisk]) -> Vec<PriorObservation> {
+fn compare_prior(prior: &State, current: &models::QuantResult) -> Vec<PriorObservation> {
     let key = |candidate: &str, category: &str, target: &str, frame: &str| {
         (
             candidate.to_string(),
@@ -509,7 +523,8 @@ fn compare_prior(prior: &State, current: &[models::CorroboratedRisk]) -> Vec<Pri
             frame.to_string(),
         )
     };
-    let current_keys = current
+    let mut current_keys = current
+        .corroborated_risks
         .iter()
         .map(|risk| {
             key(
@@ -520,7 +535,13 @@ fn compare_prior(prior: &State, current: &[models::CorroboratedRisk]) -> Vec<Pri
             )
         })
         .collect::<BTreeSet<_>>();
-    let prior_keys = prior
+    current_keys.extend(
+        current
+            .corroborated_series_risks
+            .iter()
+            .map(|risk| key(&risk.candidate_id, "series_consistency", "all", "all")),
+    );
+    let mut prior_keys = prior
         .quant
         .corroborated_risks
         .iter()
@@ -533,6 +554,13 @@ fn compare_prior(prior: &State, current: &[models::CorroboratedRisk]) -> Vec<Pri
             )
         })
         .collect::<BTreeSet<_>>();
+    prior_keys.extend(
+        prior
+            .quant
+            .corroborated_series_risks
+            .iter()
+            .map(|risk| key(&risk.candidate_id, "series_consistency", "all", "all")),
+    );
     prior_keys
         .union(&current_keys)
         .map(

@@ -1,4 +1,6 @@
-use crate::models::{Candidate, CorroboratedRisk, CritiqueRound, QuantResult, Severity};
+use crate::models::{
+    Candidate, CorroboratedRisk, CorroboratedSeriesRisk, CritiqueRound, QuantResult, Severity,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub fn quantify(candidates: &[Candidate], rounds: &[CritiqueRound]) -> QuantResult {
@@ -31,7 +33,15 @@ pub fn quantify(candidates: &[Candidate], rounds: &[CritiqueRound]) -> QuantResu
 
     let mut borda = scores.into_iter().collect::<Vec<_>>();
     borda.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let winner = borda.first().map(|(id, _)| id.clone());
+    let corroborated_series_risks = corroborated_series_risks(rounds);
+    let repair_required = corroborated_series_risks
+        .iter()
+        .map(|risk| risk.candidate_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let winner = borda
+        .iter()
+        .find(|(id, _)| !repair_required.contains(id.as_str()))
+        .map(|(id, _)| id.clone());
     let criterion_means = criterion_means(rounds);
     let provider_count = rounds
         .iter()
@@ -76,6 +86,7 @@ pub fn quantify(candidates: &[Candidate], rounds: &[CritiqueRound]) -> QuantResu
         unanimous_warning,
         minority_opinions,
         corroborated_risks: corroborated_risks(rounds),
+        corroborated_series_risks,
     }
 }
 
@@ -149,10 +160,76 @@ fn corroborated_risks(rounds: &[CritiqueRound]) -> Vec<CorroboratedRisk> {
     result
 }
 
+#[derive(Debug, Clone)]
+struct SeriesAuditRecord {
+    severity: Severity,
+    exceptions: Vec<String>,
+    evidence: String,
+    suggested_fix: String,
+}
+
+fn corroborated_series_risks(rounds: &[CritiqueRound]) -> Vec<CorroboratedSeriesRisk> {
+    let mut grouped: HashMap<String, BTreeMap<usize, SeriesAuditRecord>> = HashMap::new();
+    for round in rounds {
+        for item in &round.items {
+            let audit = &item.series_consistency;
+            if audit.severity < Severity::Warn {
+                continue;
+            }
+            grouped
+                .entry(item.candidate_id.clone())
+                .or_default()
+                .insert(
+                    round.critic_index,
+                    SeriesAuditRecord {
+                        severity: audit.severity,
+                        exceptions: audit.exceptions.clone(),
+                        evidence: audit.evidence.clone(),
+                        suggested_fix: audit.suggested_fix.clone(),
+                    },
+                );
+        }
+    }
+    let mut result = grouped
+        .into_iter()
+        .filter(|(_, reviewers)| reviewers.len() >= 2)
+        .map(|(candidate_id, reviewers)| CorroboratedSeriesRisk {
+            candidate_id,
+            reviewers: reviewers.len(),
+            max_severity: reviewers
+                .values()
+                .map(|record| record.severity)
+                .max()
+                .unwrap_or(Severity::Warn),
+            exceptions: reviewers
+                .values()
+                .flat_map(|record| record.exceptions.iter().cloned())
+                .collect(),
+            evidence: reviewers
+                .values()
+                .map(|record| record.evidence.clone())
+                .collect(),
+            suggested_fixes: reviewers
+                .into_values()
+                .map(|record| record.suggested_fix)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| {
+        b.max_severity
+            .cmp(&a.max_severity)
+            .then_with(|| b.reviewers.cmp(&a.reviewers))
+            .then_with(|| a.candidate_id.cmp(&b.candidate_id))
+    });
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CandidateCritique, CriterionScore, TargetAssets, VisualFinding};
+    use crate::models::{
+        CandidateCritique, CriterionScore, SeriesConsistencyAudit, TargetAssets, VisualFinding,
+    };
 
     fn candidate(id: &str, hard_pass: bool) -> Candidate {
         Candidate {
@@ -176,6 +253,13 @@ mod tests {
                 evidence: "visible".into(),
                 why_not_higher: "dense".into(),
             }],
+            series_consistency: SeriesConsistencyAudit {
+                severity: Severity::Warn,
+                recurring_elements: vec!["brand lockup".into()],
+                exceptions: vec!["oversized 01 appears only on frame 2".into()],
+                evidence: "frame 2 alone adds a large decorative numeral".into(),
+                suggested_fix: "remove the numeral or use one consistent counter system".into(),
+            },
             findings: vec![VisualFinding {
                 category: "hierarchy".into(),
                 target_id: "phone".into(),
@@ -212,8 +296,13 @@ mod tests {
         ];
         let result = quantify(&candidates, &rounds);
         assert!(result.borda.iter().all(|(id, _)| id != "blocked"));
+        assert_eq!(result.winner.as_deref(), Some("b"));
         assert_eq!(result.corroborated_risks.len(), 1);
         assert_eq!(result.corroborated_risks[0].reviewers, 2);
+        assert_eq!(result.corroborated_series_risks.len(), 1);
+        assert_eq!(result.corroborated_series_risks[0].reviewers, 2);
+        assert!(result.corroborated_series_risks[0].exceptions[0].contains("oversized 01"));
+        assert!(result.corroborated_series_risks[0].evidence[0].contains("frame 2"));
         assert!(result.provider_diversity_note.starts_with('2'));
     }
 }

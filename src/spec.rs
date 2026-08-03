@@ -515,7 +515,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/example.toml");
         let spec = Spec::load(&path).unwrap();
         assert_eq!(spec.targets.len(), 5);
-        assert_eq!(spec.criteria.len(), 7);
+        assert_eq!(spec.criteria.len(), 8);
         assert_eq!(spec.lenses.len(), 6);
         assert_eq!(spec.generation_segment("new_user").unwrap().id, "new_user");
     }
