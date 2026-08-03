@@ -1,5 +1,5 @@
 use crate::llm::Llm;
-use crate::spec::{AssetKind, Generation, Spec, Target};
+use crate::spec::{AssetKind, Generation, GenerationSegment, Spec, Target};
 use ab_glyph::{FontArc, PxScale};
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
@@ -7,7 +7,7 @@ use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const PLAN_ATTEMPTS: usize = 3;
@@ -15,6 +15,7 @@ const PLAN_ATTEMPTS: usize = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Layout {
+    UiDominant,
     DeviceBottom,
     DeviceCenter,
     UiFocus,
@@ -23,9 +24,31 @@ pub enum Layout {
 impl Layout {
     fn id(self) -> &'static str {
         match self {
+            Self::UiDominant => "ui_dominant",
             Self::DeviceBottom => "device_bottom",
             Self::DeviceCenter => "device_center",
             Self::UiFocus => "ui_focus",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CreativeFamily {
+    #[default]
+    #[serde(rename = "product_led")]
+    Product,
+    #[serde(rename = "outcome_led")]
+    Outcome,
+    #[serde(rename = "trust_led")]
+    Trust,
+}
+
+impl CreativeFamily {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Product => "product_led",
+            Self::Outcome => "outcome_led",
+            Self::Trust => "trust_led",
         }
     }
 }
@@ -62,6 +85,12 @@ pub struct FeaturePlan {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CreativePlan {
     pub id: String,
+    #[serde(default)]
+    pub family: CreativeFamily,
+    #[serde(default)]
+    pub hypothesis_id: String,
+    #[serde(default)]
+    pub hypothesis: String,
     pub concept: String,
     pub palette: PalettePlan,
     pub frames: Vec<FramePlan>,
@@ -77,12 +106,70 @@ struct PlanResponse {
 pub struct GenerationManifest {
     pub round: usize,
     pub generator_provider: String,
+    #[serde(default)]
+    pub segment: Option<GenerationSegment>,
     pub raw_sources: Vec<String>,
+    #[serde(default)]
+    pub target_sources: BTreeMap<String, Vec<String>>,
     pub plans: Vec<CreativePlan>,
 }
 
-pub fn discover_raw_sources(raw_root: &Path, generation: &Generation) -> Result<Vec<PathBuf>> {
-    let source_dir = raw_root.join(&generation.source_target);
+#[derive(Debug, Clone)]
+pub struct RawSourceCatalog {
+    primary_target: String,
+    by_target: BTreeMap<String, Vec<PathBuf>>,
+}
+
+impl RawSourceCatalog {
+    pub fn primary(&self) -> &[PathBuf] {
+        self.by_target
+            .get(&self.primary_target)
+            .expect("primary raw source target must exist")
+    }
+
+    fn for_target(&self, target_id: &str) -> &[PathBuf] {
+        self.by_target
+            .get(target_id)
+            .map(Vec::as_slice)
+            .unwrap_or_else(|| self.primary())
+    }
+}
+
+pub fn discover_raw_sources(
+    raw_root: &Path,
+    spec: &Spec,
+    generation: &Generation,
+) -> Result<RawSourceCatalog> {
+    let primary = discover_source_dir(raw_root, &generation.source_target, generation.frame_count)?;
+    let mut by_target = BTreeMap::from([(generation.source_target.clone(), primary)]);
+    for target in spec
+        .targets
+        .iter()
+        .filter(|target| target.kind == AssetKind::Screenshot)
+    {
+        if target.id == generation.source_target {
+            continue;
+        }
+        let source_dir = raw_root.join(&target.id);
+        if source_dir.is_dir() {
+            by_target.insert(
+                target.id.clone(),
+                discover_source_dir(raw_root, &target.id, generation.frame_count)?,
+            );
+        }
+    }
+    Ok(RawSourceCatalog {
+        primary_target: generation.source_target.clone(),
+        by_target,
+    })
+}
+
+fn discover_source_dir(
+    raw_root: &Path,
+    target_id: &str,
+    frame_count: usize,
+) -> Result<Vec<PathBuf>> {
+    let source_dir = raw_root.join(target_id);
     let mut sources = std::fs::read_dir(&source_dir)
         .with_context(|| {
             format!(
@@ -111,13 +198,13 @@ pub fn discover_raw_sources(raw_root: &Path, generation: &Generation) -> Result<
         .collect::<Vec<_>>();
     sources.sort();
     anyhow::ensure!(
-        sources.len() >= generation.frame_count,
+        sources.len() >= frame_count,
         "generation needs {} raw images in {}, found {}",
-        generation.frame_count,
+        frame_count,
         source_dir.display(),
         sources.len()
     );
-    sources.truncate(generation.frame_count);
+    sources.truncate(frame_count);
     Ok(sources)
 }
 
@@ -130,9 +217,10 @@ pub fn generate_plans(
     contact_sheet: &Path,
     variants: usize,
     round: usize,
+    segment: &GenerationSegment,
     feedback: Option<&str>,
 ) -> Result<Vec<CreativePlan>> {
-    let template = plan_template(generation, variants)?;
+    let template = plan_template(generation, variants, round, segment)?;
     let source_catalog = sources
         .iter()
         .enumerate()
@@ -140,17 +228,23 @@ pub fn generate_plans(
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
-        "# Product\nContext: {}\nAudience: {}\nProduct truths: {}\nProhibited claims: {}\n\n\
-         # Store-creative generation task\nCreate exactly {variants} materially different, production-ready creative plans for round {round}. Each plan turns the same ordered raw app captures into a coherent screenshot story. The deterministic renderer—not you—will draw the final pixels.\n\n\
+        "# Product\nContext: {}\nGeneral audience: {}\nProduct truths: {}\nProhibited claims: {}\n\n\
+         # Selected store segment\nSegment id: {}\nAudience: {}\nIntent: {}\nKeywords: {}\n\n\
+         # Store-creative generation task\nCreate exactly {variants} production-ready creative plans for round {round}. Follow the exact creative family assigned to each template plan: `product_led` makes real UI dominant and demonstrates a concrete task; `outcome_led` leads with the user's desired outcome or emotion; `trust_led` emphasizes clarity, control, and visible evidence without inventing social proof. Each plan turns the same ordered raw app captures into a coherent screenshot story. The deterministic renderer—not you—will draw the final pixels.\n\n\
          Brand: {}\nTagline: {}\nStyle direction: {}\nAllowed palette values (use these exact strings only): {}\nAllowed layouts: {}\nRequired screenshot frames per plan: {}\n\n\
          # Ordered raw captures\n{}\nThe attached image is their contact sheet in the same left-to-right, top-to-bottom order. Do not invent product UI.\n\n\
          # Prior-round feedback\n{}\n\n\
-         Write concise store copy, not captions that merely describe the pixels. Headline: at most 24 Korean characters or 42 Latin characters and at most two visual lines. Body: one short sentence. Use 0–3 short chips. Make the first three frames carry the product promise, proof, and differentiation. Later frames should add non-redundant evidence. Variants must differ in message hierarchy and visual rhythm, not in product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
+         Write concise store copy, not captions that merely describe the pixels. Headline: at most 24 Korean characters or 42 Latin characters and at most two visual lines. Body: one short sentence. Use 0–3 short chips. The first frame must use `ui_dominant` when that layout is allowed, communicate one benefit, and avoid decorative clutter. Make the first three frames carry the product promise, evidence, and differentiation. Later frames should add non-redundant evidence. Variants may explore their assigned family, but must not change product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
+         Never write rankings, awards, ratings, review counts, download counts, percentages, guarantees, or superlatives unless the exact supporting token appears in this verified allowlist: {}. An empty allowlist means all such trust markers are prohibited.\n\n\
          Return JSON only. Keep every id/index/field in this complete template, replace all placeholder copy, and preserve the exact number of plans and frames:\n{}",
         spec.context,
         spec.audience,
         list_or_none(&spec.product_truth),
         list_or_none(&spec.prohibited_claims),
+        segment.id,
+        segment.audience,
+        segment.intent,
+        list_or_none(&segment.keywords),
         generation.brand_name,
         generation.tagline,
         generation.style_direction,
@@ -159,6 +253,7 @@ pub fn generate_plans(
         generation.frame_count,
         source_catalog,
         feedback.unwrap_or("No prior round. Explore distinct evidence-backed directions."),
+        list_or_none(&generation.verified_claim_tokens),
         template
     );
 
@@ -171,7 +266,14 @@ pub fn generate_plans(
             &[contact_sheet.to_path_buf()],
         );
         match result.and_then(|mut response| {
-            normalize_and_validate(&mut response.plans, generation, variants)?;
+            normalize_and_validate(
+                &mut response.plans,
+                spec,
+                generation,
+                variants,
+                round,
+                segment,
+            )?;
             Ok(response.plans)
         }) {
             Ok(plans) => return Ok(plans),
@@ -194,15 +296,31 @@ pub fn write_manifest(
     path: &Path,
     round: usize,
     llm: &Llm,
-    sources: &[PathBuf],
+    sources: &RawSourceCatalog,
+    segment: &GenerationSegment,
     plans: &[CreativePlan],
 ) -> Result<()> {
     let manifest = GenerationManifest {
         round,
         generator_provider: llm.provider_label.to_string(),
+        segment: Some(segment.clone()),
         raw_sources: sources
+            .primary()
             .iter()
             .map(|path| path.display().to_string())
+            .collect(),
+        target_sources: sources
+            .by_target
+            .iter()
+            .map(|(target, paths)| {
+                (
+                    target.clone(),
+                    paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect(),
+                )
+            })
             .collect(),
         plans: plans.to_vec(),
     };
@@ -221,7 +339,7 @@ pub fn render_plans(
     spec: &Spec,
     generation: &Generation,
     plans: &[CreativePlan],
-    sources: &[PathBuf],
+    sources: &RawSourceCatalog,
     font_path: &Path,
     candidates_root: &Path,
 ) -> Result<()> {
@@ -237,18 +355,20 @@ pub fn render_plans(
     for plan in plans {
         let candidate_dir = candidates_root.join(&plan.id);
         for target in &spec.targets {
+            let target_sources = sources.for_target(&target.id);
             let target_dir = candidate_dir.join(&target.id);
             std::fs::create_dir_all(&target_dir)?;
             let (width, height) = target_size(target)?;
             match target.kind {
                 AssetKind::Screenshot => {
                     for frame in &plan.frames {
-                        let source = image::open(&sources[frame.index - 1]).with_context(|| {
-                            format!(
-                                "failed to open raw screenshot: {}",
-                                sources[frame.index - 1].display()
-                            )
-                        })?;
+                        let source =
+                            image::open(&target_sources[frame.index - 1]).with_context(|| {
+                                format!(
+                                    "failed to open raw screenshot: {}",
+                                    target_sources[frame.index - 1].display()
+                                )
+                            })?;
                         let mut rendered = render_screenshot(
                             width,
                             height,
@@ -270,7 +390,7 @@ pub fn render_plans(
                         &plan.feature,
                         &plan.palette,
                         &font,
-                        sources,
+                        sources.primary(),
                     )?;
                     force_opaque(&mut rendered);
                     rendered.save(target_dir.join("01.png"))?;
@@ -281,7 +401,12 @@ pub fn render_plans(
     Ok(())
 }
 
-fn plan_template(generation: &Generation, variants: usize) -> Result<String> {
+fn plan_template(
+    generation: &Generation,
+    variants: usize,
+    round: usize,
+    segment: &GenerationSegment,
+) -> Result<String> {
     let layouts = generation
         .allowed_layouts
         .iter()
@@ -289,20 +414,35 @@ fn plan_template(generation: &Generation, variants: usize) -> Result<String> {
         .collect::<Result<Vec<_>>>()?;
     let plans = (0..variants)
         .map(|variant| {
+            let family =
+                &generation.creative_families[variant % generation.creative_families.len()];
             let frames = (0..generation.frame_count)
                 .map(|index| {
+                    let layout = if index == 0
+                        && generation
+                            .allowed_layouts
+                            .iter()
+                            .any(|layout| layout == "ui_dominant")
+                    {
+                        Layout::UiDominant
+                    } else {
+                        layouts[(index + variant) % layouts.len()]
+                    };
                     serde_json::json!({
                         "index": index + 1,
                         "badge": "replace",
                         "headline": "replace",
                         "body": "replace",
                         "chips": ["replace"],
-                        "layout": layouts[(index + variant) % layouts.len()].id()
+                        "layout": layout.id()
                     })
                 })
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "id": format!("variant_{:02}", variant + 1),
+                "family": family,
+                "hypothesis_id": format!("r{round:02}-{}-{:02}", segment.id, variant + 1),
+                "hypothesis": "replace with one falsifiable audience-and-intent hypothesis",
                 "concept": "replace with the distinct creative hypothesis",
                 "palette": {
                     "background_start": generation.palette[0],
@@ -328,8 +468,11 @@ fn plan_template(generation: &Generation, variants: usize) -> Result<String> {
 
 fn normalize_and_validate(
     plans: &mut [CreativePlan],
+    spec: &Spec,
     generation: &Generation,
     variants: usize,
+    round: usize,
+    segment: &GenerationSegment,
 ) -> Result<()> {
     anyhow::ensure!(
         plans.len() == variants,
@@ -344,6 +487,19 @@ fn normalize_and_validate(
         .collect::<HashSet<_>>();
     for (plan_index, plan) in plans.iter_mut().enumerate() {
         plan.id = format!("variant_{:02}", plan_index + 1);
+        let expected_family =
+            &generation.creative_families[plan_index % generation.creative_families.len()];
+        anyhow::ensure!(
+            plan.family.id() == expected_family,
+            "{} must use assigned family {expected_family}",
+            plan.id
+        );
+        plan.hypothesis_id = format!("r{round:02}-{}-{:02}", segment.id, plan_index + 1);
+        anyhow::ensure!(
+            !plan.hypothesis.trim().is_empty(),
+            "{} hypothesis is empty",
+            plan.id
+        );
         anyhow::ensure!(
             !plan.concept.trim().is_empty(),
             "{} concept is empty",
@@ -408,6 +564,17 @@ fn normalize_and_validate(
                 frame.index
             );
         }
+        if generation
+            .allowed_layouts
+            .iter()
+            .any(|layout| layout == "ui_dominant")
+        {
+            anyhow::ensure!(
+                plan.frames.first().map(|frame| frame.layout) == Some(Layout::UiDominant),
+                "{} first frame must use ui_dominant",
+                plan.id
+            );
+        }
         anyhow::ensure!(
             !plan.feature.headline.trim().is_empty(),
             "{} feature headline is empty",
@@ -435,6 +602,70 @@ fn normalize_and_validate(
                 .all(|index| (1..=generation.frame_count).contains(index)),
             "{} feature contains an invalid source index",
             plan.id
+        );
+        validate_copy_claims(spec, generation, plan)?;
+    }
+    Ok(())
+}
+
+fn validate_copy_claims(spec: &Spec, generation: &Generation, plan: &CreativePlan) -> Result<()> {
+    let mut values = Vec::new();
+    for frame in &plan.frames {
+        values.extend([
+            frame.badge.as_str(),
+            frame.headline.as_str(),
+            frame.body.as_str(),
+        ]);
+        values.extend(frame.chips.iter().map(String::as_str));
+    }
+    values.extend([plan.feature.headline.as_str(), plan.feature.body.as_str()]);
+    values.extend(plan.feature.chips.iter().map(String::as_str));
+    let copy = values.join(" ").to_lowercase();
+
+    for prohibited in &spec.prohibited_claims {
+        anyhow::ensure!(
+            !copy.contains(&prohibited.to_lowercase()),
+            "{} contains prohibited claim: {prohibited}",
+            plan.id
+        );
+    }
+
+    const TRUST_MARKERS: &[&str] = &[
+        "#1",
+        "1위",
+        "최고",
+        "best",
+        "award",
+        "수상",
+        "editor's choice",
+        "에디터 추천",
+        "평점",
+        "별점",
+        "★",
+        "stars",
+        "%",
+        "guarantee",
+        "보장",
+        "million",
+        "만 명",
+        "downloads",
+        "다운로드",
+    ];
+    let present_markers = TRUST_MARKERS
+        .iter()
+        .filter(|marker| copy.contains(**marker))
+        .copied()
+        .collect::<Vec<_>>();
+    if !present_markers.is_empty() {
+        let has_verified_token = generation
+            .verified_claim_tokens
+            .iter()
+            .any(|token| copy.contains(&token.to_lowercase()));
+        anyhow::ensure!(
+            has_verified_token,
+            "{} contains unverified trust marker(s): {}",
+            plan.id,
+            present_markers.join(", ")
         );
     }
     Ok(())
@@ -517,12 +748,14 @@ fn render_screenshot(
         start,
     );
     let screenshot_y = match frame.layout {
+        Layout::UiDominant => (height as f32 * 0.27) as i32,
         Layout::DeviceBottom => (height as f32 * 0.37) as i32,
         Layout::DeviceCenter => (height as f32 * 0.33) as i32,
         Layout::UiFocus => (height as f32 * 0.31) as i32,
     };
     let max_width = (width as f32
         * match frame.layout {
+            Layout::UiDominant => 0.92,
             Layout::DeviceBottom => 0.68,
             Layout::DeviceCenter => 0.76,
             Layout::UiFocus => 0.86,
@@ -1028,6 +1261,7 @@ fn lerp(start: u8, end: u8, t: f32) -> u8 {
 
 fn layout_from_id(value: &str) -> Result<Layout> {
     match value {
+        "ui_dominant" => Ok(Layout::UiDominant),
         "device_bottom" => Ok(Layout::DeviceBottom),
         "device_center" => Ok(Layout::DeviceCenter),
         "ui_focus" => Ok(Layout::UiFocus),
@@ -1054,6 +1288,26 @@ mod tests {
     }
 
     #[test]
+    fn target_specific_raw_sources_override_primary_with_safe_fallback() {
+        let catalog = RawSourceCatalog {
+            primary_target: "phone".into(),
+            by_target: BTreeMap::from([
+                ("phone".into(), vec![PathBuf::from("phone/01.png")]),
+                ("tablet".into(), vec![PathBuf::from("tablet/01.png")]),
+            ]),
+        };
+
+        assert_eq!(
+            catalog.for_target("tablet")[0],
+            PathBuf::from("tablet/01.png")
+        );
+        assert_eq!(
+            catalog.for_target("unknown")[0],
+            PathBuf::from("phone/01.png")
+        );
+    }
+
+    #[test]
     fn normalized_plans_cannot_escape_candidate_directory() {
         let generation = Generation {
             brand_name: "Test".into(),
@@ -1070,9 +1324,22 @@ mod tests {
                 "#FFFFFF".into(),
             ],
             allowed_layouts: vec!["device_bottom".into()],
+            creative_families: vec!["product_led".into()],
+            segments: Vec::new(),
+            verified_claim_tokens: Vec::new(),
+        };
+        let spec = test_spec();
+        let segment = GenerationSegment {
+            id: "default".into(),
+            audience: "test audience".into(),
+            intent: "test intent".into(),
+            keywords: Vec::new(),
         };
         let mut plans = vec![CreativePlan {
             id: "../../escape".into(),
+            family: CreativeFamily::Product,
+            hypothesis_id: "unsafe".into(),
+            hypothesis: "Showing real UI first will improve comprehension.".into(),
             concept: "truthful".into(),
             palette: PalettePlan {
                 background_start: "#000000".into(),
@@ -1096,7 +1363,88 @@ mod tests {
                 source_indices: vec![1],
             },
         }];
-        normalize_and_validate(&mut plans, &generation, 1).unwrap();
+        normalize_and_validate(&mut plans, &spec, &generation, 1, 1, &segment).unwrap();
         assert_eq!(plans[0].id, "variant_01");
+        assert_eq!(plans[0].hypothesis_id, "r01-default-01");
+    }
+
+    #[test]
+    fn unverified_social_proof_is_rejected() {
+        let generation = Generation {
+            brand_name: "Test".into(),
+            tagline: String::new(),
+            source_target: "phone".into(),
+            frame_count: 1,
+            generator_backend: "openrouter".into(),
+            generator_model: "test".into(),
+            style_direction: String::new(),
+            palette: vec![
+                "#000000".into(),
+                "#111111".into(),
+                "#222222".into(),
+                "#FFFFFF".into(),
+            ],
+            allowed_layouts: vec!["ui_dominant".into()],
+            creative_families: vec!["product_led".into()],
+            segments: Vec::new(),
+            verified_claim_tokens: Vec::new(),
+        };
+        let spec = test_spec();
+        let segment = GenerationSegment {
+            id: "default".into(),
+            audience: "test audience".into(),
+            intent: "test intent".into(),
+            keywords: Vec::new(),
+        };
+        let mut plans = vec![CreativePlan {
+            id: "variant".into(),
+            family: CreativeFamily::Product,
+            hypothesis_id: "hypothesis".into(),
+            hypothesis: "Real UI improves comprehension.".into(),
+            concept: "truthful".into(),
+            palette: PalettePlan {
+                background_start: "#000000".into(),
+                background_end: "#111111".into(),
+                accent: "#222222".into(),
+                text: "#FFFFFF".into(),
+                muted: "#FFFFFF".into(),
+            },
+            frames: vec![FramePlan {
+                index: 1,
+                badge: "badge".into(),
+                headline: "평점 4.9 최고의 앱".into(),
+                body: "body".into(),
+                chips: vec![],
+                layout: Layout::UiDominant,
+            }],
+            feature: FeaturePlan {
+                headline: "headline".into(),
+                body: "body".into(),
+                chips: vec![],
+                source_indices: vec![1],
+            },
+        }];
+
+        let error =
+            normalize_and_validate(&mut plans, &spec, &generation, 1, 1, &segment).unwrap_err();
+        assert!(error.to_string().contains("unverified trust marker"));
+    }
+
+    fn test_spec() -> Spec {
+        Spec {
+            name: "test".into(),
+            context: String::new(),
+            audience: "test audience".into(),
+            product_truth: Vec::new(),
+            prohibited_claims: Vec::new(),
+            thumbnail_width: 220,
+            critic_backends: vec!["openrouter".into()],
+            openrouter_critic_model: "test".into(),
+            targets: Vec::new(),
+            criteria: Vec::new(),
+            lenses: Vec::new(),
+            generation: None,
+            experiment: Default::default(),
+        }
     }
 }

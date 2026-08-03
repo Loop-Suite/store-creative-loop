@@ -95,6 +95,23 @@ pub struct Generation {
     pub palette: Vec<String>,
     #[serde(default = "default_layouts")]
     pub allowed_layouts: Vec<String>,
+    #[serde(default = "default_creative_families")]
+    pub creative_families: Vec<String>,
+    #[serde(default)]
+    pub segments: Vec<GenerationSegment>,
+    /// Exact, verified tokens that may appear in numeric, ranking, award, rating, or
+    /// guarantee-like claims. Empty means those trust markers are blocked.
+    #[serde(default)]
+    pub verified_claim_tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GenerationSegment {
+    pub id: String,
+    pub audience: String,
+    pub intent: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 impl Default for Experiment {
@@ -160,9 +177,17 @@ fn default_generator_model() -> String {
 }
 fn default_layouts() -> Vec<String> {
     vec![
+        "ui_dominant".to_string(),
         "device_bottom".to_string(),
         "device_center".to_string(),
         "ui_focus".to_string(),
+    ]
+}
+fn default_creative_families() -> Vec<String> {
+    vec![
+        "product_led".to_string(),
+        "outcome_led".to_string(),
+        "trust_led".to_string(),
     ]
 }
 fn default_experiment_variable() -> String {
@@ -267,9 +292,52 @@ impl Spec {
             anyhow::ensure!(
                 generation.allowed_layouts.iter().all(|layout| matches!(
                     layout.as_str(),
-                    "device_bottom" | "device_center" | "ui_focus"
+                    "device_bottom" | "device_center" | "ui_focus" | "ui_dominant"
                 )),
                 "generation.allowed_layouts contains an unsupported layout"
+            );
+            anyhow::ensure!(
+                !generation.creative_families.is_empty(),
+                "generation.creative_families must not be empty"
+            );
+            anyhow::ensure!(
+                generation.creative_families.iter().all(|family| matches!(
+                    family.as_str(),
+                    "product_led" | "outcome_led" | "trust_led"
+                )),
+                "generation.creative_families contains an unsupported family"
+            );
+            ensure_unique(
+                "creative family",
+                generation.creative_families.iter().map(String::as_str),
+            )?;
+            ensure_unique(
+                "generation segment",
+                generation
+                    .segments
+                    .iter()
+                    .map(|segment| segment.id.as_str()),
+            )?;
+            anyhow::ensure!(
+                generation.segments.iter().all(|segment| {
+                    segment.id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '_' || character == '-'
+                    })
+                }),
+                "generation segment ids support only ASCII letters, numbers, underscore, and hyphen"
+            );
+            anyhow::ensure!(
+                generation.segments.iter().all(|segment| {
+                    !segment.audience.trim().is_empty() && !segment.intent.trim().is_empty()
+                }),
+                "generation segments need non-empty audience and intent"
+            );
+            anyhow::ensure!(
+                generation
+                    .verified_claim_tokens
+                    .iter()
+                    .all(|token| !token.trim().is_empty()),
+                "generation.verified_claim_tokens must not contain empty values"
             );
         }
         Ok(())
@@ -277,6 +345,25 @@ impl Spec {
 
     pub fn target(&self, id: &str) -> Option<&Target> {
         self.targets.iter().find(|t| t.id == id)
+    }
+
+    pub fn generation_segment(&self, id: &str) -> Result<GenerationSegment> {
+        let generation = self
+            .generation
+            .as_ref()
+            .context("spec has no [generation] section")?;
+        if let Some(segment) = generation.segments.iter().find(|segment| segment.id == id) {
+            return Ok(segment.clone());
+        }
+        if id == "default" {
+            return Ok(GenerationSegment {
+                id: "default".to_string(),
+                audience: self.audience.clone(),
+                intent: "general store discovery".to_string(),
+                keywords: Vec::new(),
+            });
+        }
+        anyhow::bail!("unknown generation segment: {id}")
     }
 }
 
@@ -305,8 +392,9 @@ mod tests {
     fn example_spec_parses_and_validates() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs/example.toml");
         let spec = Spec::load(&path).unwrap();
-        assert_eq!(spec.targets.len(), 4);
+        assert_eq!(spec.targets.len(), 5);
         assert_eq!(spec.criteria.len(), 7);
         assert_eq!(spec.lenses.len(), 6);
+        assert_eq!(spec.generation_segment("new_user").unwrap().id, "new_user");
     }
 }

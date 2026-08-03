@@ -1,6 +1,6 @@
 # store-creative-loop
 
-`storeloop` turns raw app captures into real app-store PNG sets for phone, tablet, and Google Play feature graphics. It generates multiple creative directions, renders every target deterministically, rejects invalid exports, compares the valid variants blindly, and feeds the winning plan plus observed risks into the next generation round.
+`storeloop` turns raw app captures into real app-store PNG sets for phone, tablet, and Google Play feature graphics. It generates segment-specific `product_led`, `outcome_led`, and `trust_led` hypotheses, renders every target deterministically, rejects invalid exports or unsupported trust claims, compares the valid variants blindly, and feeds the winning plan plus observed risks into the next generation round.
 
 Review is an internal gate in the creation loop—not the product itself, and never a substitute for a live store experiment.
 
@@ -8,7 +8,7 @@ Review is an internal gate in the creation loop—not the product itself, and ne
 
 ```mermaid
 flowchart LR
-    A["Raw app captures + product truth + target spec"] --> B["LLM creative plans<br/>copy · sequence · layout · palette"]
+    A["Raw app captures + product truth<br/>segment · intent · target spec"] --> B["LLM creative hypotheses<br/>product · outcome · trust"]
     B --> C["Deterministic renderer<br/>phone · tablet · feature graphic"]
     C --> D["Pixel and platform policy gates"]
     D -->|"BLOCK"| E["Repair plan or renderer"]
@@ -84,17 +84,27 @@ The creative plan is editable JSON and the renderer is deterministic. The same p
 
 ## Input convention
 
-Raw captures live under the `source_target` declared in `[generation]`. Lexical filename order is the initial feature order.
+Raw captures live under the `source_target` declared in `[generation]`. Lexical filename order is the initial feature order. Add another folder named after any screenshot target to use real device-specific sources; if it is absent, the renderer safely falls back to the primary source set.
 
 ```text
 raw/
-  apple_iphone_65_ko/
+  apple_iphone_69_ko/
+    01.png
+    02.png
+    03.png
+  apple_ipad_13_ko/       # optional target-specific override
+    01.png
+    02.png
+    03.png
+  google_tablet_ko/       # optional target-specific override
     01.png
     02.png
     03.png
 ```
 
-Start from [`specs/example.toml`](specs/example.toml). It defines the brand, style direction, palette, allowed layouts, product truths, generation model, target canvas sizes, critique criteria, and experimental guardrails. Platform rules change, so re-check current official specifications before submission.
+Start from [`specs/example.toml`](specs/example.toml). It defines the brand, style direction, palette, allowed layouts, three creative families, audience segments, verified claim tokens, product truths, generation model, target canvas sizes, critique criteria, and experimental guardrails. Its primary Apple targets use the current 6.9-inch iPhone (`1260×2736`) and 13-inch iPad (`2064×2752`) sizes. Platform rules change, so re-check official specifications before submission.
+
+`verified_claim_tokens` is deliberately empty by default. Rankings, awards, ratings, review/download counts, percentages, guarantees, and superlatives are rejected unless the exact supporting token is explicitly allowlisted.
 
 ## Generate screenshots
 
@@ -108,12 +118,13 @@ target/release/storeloop generate \
   --raw ./raw \
   --font /path/to/KoreanFont.ttc \
   --out ./runs/store-set-01 \
+  --segment new_user \
   --variants 3 \
   --iterations 2 \
   --critics 3
 ```
 
-Each iteration performs plan → render → validate → blind review → refinement feedback. The final winner is copied to `final/`.
+Each iteration performs segment selection → three-family hypothesis planning → render → validate → blind review → refinement feedback. The first frame uses the UI-dominant layout when available, and every plan receives a stable hypothesis id. The final winner is copied to `final/`.
 
 To edit the generated copy, sequence, colors, or layouts manually and reproduce the PNGs without another LLM call:
 
@@ -143,7 +154,7 @@ target/release/storeloop review \
 
 ## Outputs
 
-- `round-NN/generation.json`: editable creative plans, source manifest, and generation provenance.
+- `round-NN/generation.json`: selected segment, target-specific source manifest, creative family, hypothesis id, editable plans, and generation provenance.
 - `round-NN/candidates/`: rendered phone, tablet, and feature-graphic variants.
 - `round-NN/review/state.json`: policy evidence, blind map, independent reviews, arithmetic, and risk state.
 - `round-NN/review/report.md`: offline recommendation, dissent, provider warnings, and corroborated risks.
@@ -154,6 +165,8 @@ target/release/storeloop review \
 ## Safeguards and verdict boundary
 
 - Rendering, pixel size, actual alpha, target count, hashes, anonymization, rank arithmetic, and risk thresholds are deterministic.
+- Prohibited phrases and unverified rating/ranking/award/percentage/guarantee markers are blocked before rendering.
+- A target-specific raw folder is used when present; primary phone sources are only a fallback, never silently preferred over real tablet captures.
 - Planning, copy, visual interpretation, and rubric scores are model judgments.
 - Critics do not see one another; candidate order rotates to reduce anchoring and position bias.
 - A policy-blocked variant cannot win, regardless of model preference.
