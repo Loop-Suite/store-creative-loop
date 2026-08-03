@@ -89,6 +89,9 @@ enum Command {
         iterations: usize,
         #[arg(long, default_value_t = 3)]
         critics: usize,
+        /// Segment id declared in [[generation.segments]]; defaults to the general audience.
+        #[arg(long, default_value = "default")]
+        segment: String,
     },
     /// Deterministically re-render an editable generation.json without another LLM call.
     Render {
@@ -137,7 +140,18 @@ fn main() -> Result<()> {
             variants,
             iterations,
             critics,
-        } => run_generation_loop(&cli, spec, raw, font, out, *variants, *iterations, *critics),
+            segment,
+        } => run_generation_loop(
+            &cli,
+            spec,
+            raw,
+            font,
+            out,
+            *variants,
+            *iterations,
+            *critics,
+            segment,
+        ),
         Command::Render {
             spec,
             raw,
@@ -161,7 +175,7 @@ fn render_manifest(
         .generation
         .as_ref()
         .context("spec needs a [generation] section for the render command")?;
-    let sources = generation::discover_raw_sources(raw_root, generation_spec)?;
+    let sources = generation::discover_raw_sources(raw_root, &spec, generation_spec)?;
     let manifest = generation::load_manifest(manifest_path)?;
     generation::render_plans(
         &spec,
@@ -189,6 +203,7 @@ fn run_generation_loop(
     variants: usize,
     iterations: usize,
     critics: usize,
+    segment_id: &str,
 ) -> Result<()> {
     anyhow::ensure!(
         variants >= 2,
@@ -202,7 +217,13 @@ fn run_generation_loop(
         .generation
         .as_ref()
         .context("spec needs a [generation] section for the generate command")?;
-    let sources = generation::discover_raw_sources(raw_root, generation_spec)?;
+    anyhow::ensure!(
+        variants >= generation_spec.creative_families.len(),
+        "generate needs at least one variant per creative family ({} configured)",
+        generation_spec.creative_families.len()
+    );
+    let segment = spec.generation_segment(segment_id)?;
+    let sources = generation::discover_raw_sources(raw_root, &spec, generation_spec)?;
     let generator = build_generator_llm(cli, generation_spec)?;
     std::fs::create_dir_all(out)?;
 
@@ -215,19 +236,20 @@ fn run_generation_loop(
         let round_dir = out.join(format!("round-{round:02}"));
         std::fs::create_dir_all(&round_dir)?;
         let raw_contact = round_dir.join("raw-contact.png");
-        contact_sheet::render_sources(&sources, 320, &raw_contact)?;
+        contact_sheet::render_sources(sources.primary(), 320, &raw_contact)?;
         eprintln!(
-            "generation round {round}/{iterations}: provider={}, variants={variants}",
-            generator.provider_label
+            "generation round {round}/{iterations}: provider={}, variants={variants}, segment={}",
+            generator.provider_label, segment.id
         );
         let plans = generation::generate_plans(
             &generator,
             &spec,
             generation_spec,
-            &sources,
+            sources.primary(),
             &raw_contact,
             variants,
             round,
+            &segment,
             feedback.as_deref(),
         )?;
         generation::write_manifest(
@@ -235,6 +257,7 @@ fn run_generation_loop(
             round,
             &generator,
             &sources,
+            &segment,
             &plans,
         )?;
         let candidates_root = round_dir.join("candidates");
@@ -277,7 +300,11 @@ fn run_generation_loop(
     std::fs::write(
         out.join("summary.md"),
         format!(
-            "# Generated store creative winner\n\n- Winner: `{winner}`\n- Iterations: {iterations}\n- Variants per round: {variants}\n- Final PNGs: [`final/`](final/)\n- Winning plan: [`winner.json`](winner.json)\n\nThe winner is an offline model-assisted recommendation. Use the final round's `review/experiment.md` before making a conversion claim.\n"
+            "# Generated store creative winner\n\n- Winner: `{winner}`\n- Segment: `{}`\n- Creative family: `{}`\n- Hypothesis: `{}` — {}\n- Iterations: {iterations}\n- Variants per round: {variants}\n- Final PNGs: [`final/`](final/)\n- Winning plan: [`winner.json`](winner.json)\n\nThe winner is an offline model-assisted recommendation. Use the final round's `review/experiment.md` before making a conversion claim.\n",
+            segment.id,
+            winning_plan.family.id(),
+            winning_plan.hypothesis_id,
+            winning_plan.hypothesis
         ),
     )?;
     println!("generated winner {winner}: {}", final_dir.display());
