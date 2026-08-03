@@ -75,7 +75,7 @@ pub fn run_one(
          # Targets\n{}\n\n\
          # Candidate catalog\n{}\nEach file is a contact sheet. Frames read left-to-right, then top-to-bottom. Judge the whole multi-device set and identify target/frame-specific evidence.\n\n\
          # Scored criteria\n{}\n\n\
-         Review every candidate. Use scores from 1 to 5. `findings.category` should use a stable short token such as hierarchy, copy_truth, sequence, accessibility, localization, device_fit, or policy. Every finding must contain `category`, `target_id`, `frame`, `severity`, `evidence`, and `suggested_fix`; `target_id` must be one of the listed target ids, `severity` must be `note`, `warn`, or `block`, and `frame` is a filename or 1-based position such as `2` (`all` only when genuinely set-wide). Ranking must contain every candidate once, best offline recommendation first, with no ties.\n\n\
+         Review every candidate. Use scores from 1 to 5. Be concise: keep each summary, evidence, limitation, and fix to one sentence of at most 25 words; return only the 1–3 most decision-relevant findings per candidate; keep the complete JSON response below 4,000 tokens. `findings.category` should use a stable short token such as hierarchy, copy_truth, sequence, accessibility, localization, device_fit, or policy. Every finding must contain `category`, `target_id`, `frame`, `severity`, `evidence`, and `suggested_fix`; `target_id` must be one of the listed target ids, `severity` must be `note`, `warn`, or `block`, and `frame` is a filename or 1-based position such as `2` (`all` only when genuinely set-wide). Ranking must contain every candidate once, best offline recommendation first, with no ties.\n\n\
          The response must contain exactly these candidate ids: {}. Every candidate needs exactly one item, every item needs all listed criterion ids exactly once, and ranking must be a permutation of the same candidate ids.\n\n\
          Return JSON only. Use this complete template, replace every placeholder, and reorder `ranking` based on your judgment:\n{}",
         spec.context,
@@ -177,7 +177,7 @@ where
                         "warning: critic response rejected on schema attempt {attempt}/{attempts}: {detail}"
                     );
                     prompt = format!(
-                        "{base_prompt}\n\n# Correction required\nYour previous response was rejected: {detail}. Return a completely new JSON response that satisfies every field, coverage, enum, and range constraint. Do not omit, rename, or duplicate any candidate or criterion id. Every finding must include category, target_id, frame, severity, evidence, and suggested_fix."
+                        "{base_prompt}\n\n# Correction required\nYour previous response was rejected: {detail}. Return a completely new JSON response that satisfies every field, coverage, enum, and range constraint. Do not omit, rename, or duplicate any candidate or criterion id. Every finding must include category, target_id, frame, severity, evidence, and suggested_fix. Keep every text value to one short sentence, include at most three findings per candidate, and keep the entire response below 4,000 tokens."
                     );
                 }
                 last_error = Some(error);
