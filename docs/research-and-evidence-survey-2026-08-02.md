@@ -1,6 +1,6 @@
 # Store creative generation and evaluation loops: research and evidence survey
 
-Date: 2026-08-02
+Date: 2026-08-03
 Scope: reusable generation, rendering, and evaluation infrastructure for app-store screenshots, phone/tablet variants, locales, and feature graphics—not a design recommendation for one app.
 
 ## Executive conclusion
@@ -19,6 +19,21 @@ Existing tools are strong at one or two jobs: generating store art, capturing/ex
 ## Research method
 
 The survey triangulated five kinds of evidence: Loop-Suite repositories, open-source store tooling, snapshot/visual-regression infrastructure, academic literature, and product/design team practices. Official Apple and Google documentation was used for platform constraints. Stars are only ecosystem signals observed during the survey, not quality scores, and can change after this date.
+
+## 2025–2026 trend update and implementation decisions
+
+The dominant change is operational, not one universal visual fashion: store teams are moving from one default gallery to a matrix of audience-, intent-, locale-, campaign-, and season-specific sets.
+
+| Observed direction | Evidence boundary | Implemented response |
+|---|---|---|
+| Segment-specific store pages | Apple supports up to [70 custom product pages](https://developer.apple.com/app-store/custom-product-pages/); Google supports up to [50 custom store listings](https://support.google.com/googleplay/android-developer/answer/9867158?hl=en) targeted by country, keyword, ad traffic, or user state. | `[[generation.segments]]` declares audience, intent, and keywords; `generate --segment` persists the selected context in every manifest. |
+| First-frame simplicity and real UI | Rapid-impression research finds visual complexity affects judgments within very short exposures. This is aesthetic evidence, not a store conversion coefficient. | `ui_dominant` is the first-frame default; thumbnail review still checks whether the actual result is legible. |
+| Category- and intent-dependent art direction | Current industry surveys show product-led utility/finance patterns and more emotional lifestyle patterns; neither is a universal winner. | Every exploration round assigns explicit `product_led`, `outcome_led`, and `trust_led` families instead of one trend template. |
+| Localization as creative adaptation | Vendor case studies report large gains from culture-specific art, but their uplift values do not generalize. | Segment metadata and target-specific raw folders allow locale/device art direction rather than text-only replacement. |
+| Creative operations at scale | Google's [Asset Library](https://support.google.com/googleplay/android-developer/answer/16386748?hl=en) organizes assets by language, theme, campaign, type, and experiment; agent-driven open-source tools increasingly combine localization and exact-size batch export. | Manifests retain segment, hypothesis, family, provider, primary sources, and target overrides for reproducible batch production. |
+| Current large-device masters | Apple's current specifications include 6.9-inch iPhone `1260×2736` and 13-inch iPad `2064×2752` portrait masters. | The example spec prioritizes those sizes and adds an Android-tablet target; older accepted sizes can remain in app-specific specs. |
+
+Color gradients, dark premium palettes, glass effects, tilted frames, panoramas, lifestyle photography, and social proof remain testable hypotheses—not defaults. The generator blocks unsupported ratings, rankings, awards, percentages, download counts, guarantees, and superlatives unless an exact verified token is declared.
 
 ## Loop-Suite pattern review
 
@@ -80,9 +95,9 @@ Platform rules change. The example spec is a starting configuration, not a subst
 
 | Stage | Authority | Output |
 |---|---|---|
-| Source ingest | Local filesystem | Ordered raw-capture manifest and contact sheet |
-| Creative planning | Model-assisted, constrained by spec | Multiple editable plans for copy, sequence, palette, and target-aware layouts |
-| Multi-target render | Deterministic code | Real phone, tablet, and feature-graphic PNG sets at exact canvas sizes |
+| Source ingest | Local filesystem | Ordered primary captures plus target-specific phone/tablet overrides and contact sheet |
+| Creative planning | Model-assisted, constrained by spec | Segment-specific product/outcome/trust hypotheses with editable copy inside fixed story roles and art-direction recipes |
+| Multi-target render | Deterministic code | Role-aware hero, split, chapter, and synthesis compositions using real UI at exact target sizes |
 | Policy gate | Deterministic code | PASS/BLOCK plus file-level evidence |
 | Blind render | Deterministic code | Anonymized per-target contact sheets at controlled thumbnail width |
 | Critique | Independent multimodal model calls | First-glance read, sequence read, rubric evidence, target/frame findings, full ranking |
@@ -94,6 +109,7 @@ Platform rules change. The example spec is a starting configuration, not a subst
 ## Non-goals and limitations
 
 - The renderer is intentionally plan-driven rather than a full WYSIWYG editor. The tool does not upload listings, scrape competitors, or choose a universal house style.
+- Trend observations select hypotheses to generate, not a house style or a promised conversion winner.
 - Raw captures and product truth remain required inputs; generation does not invent missing application screens or verified capabilities.
 - It does not OCR or fact-check every word against a running application; product truths and prohibited claims must be supplied honestly.
 - Critics can miss small text, misread UI, or share training-data biases. Contact sheets reduce presentation variance but do not remove model error.
