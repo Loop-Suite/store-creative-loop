@@ -73,12 +73,14 @@ impl Llm {
                 Err(error) => last_error = Some(error),
             }
             if self.verbose {
-                eprintln!(
-                    "[json attempt {}/{}] {:#}",
-                    attempt + 1,
-                    self.retries + 1,
-                    last_error.as_ref().expect("retry error")
-                );
+                match last_error.as_ref() {
+                    Some(error) => {
+                        eprintln!("[json attempt {}/{}] {:#}", attempt + 1, self.retries + 1, error);
+                    }
+                    None => {
+                        eprintln!("[json attempt {}/{}] unknown retry error", attempt + 1, self.retries + 1);
+                    }
+                }
             }
         }
         Err(last_error.unwrap_or_else(|| anyhow!("LLM request failed")))
