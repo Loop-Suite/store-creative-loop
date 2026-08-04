@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const PLAN_ATTEMPTS: usize = 3;
+const RENDER_SUPERSAMPLE: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1052,6 +1053,44 @@ fn render_screenshot(
     store: Store,
     source: &RgbaImage,
 ) -> Result<RgbaImage> {
+    let factor = RENDER_SUPERSAMPLE;
+    if factor <= 1 {
+        return render_screenshot_native(width, height, brand, frame, palette, font, store, source);
+    }
+    let target_width = width.checked_mul(factor).with_context(|| {
+        format!("rendered width overflows at supersample factor {factor}")
+    })?;
+    let target_height = height.checked_mul(factor).with_context(|| {
+        format!("rendered height overflows at supersample factor {factor}")
+    })?;
+    let rendered = render_screenshot_native(
+        target_width,
+        target_height,
+        brand,
+        frame,
+        palette,
+        font,
+        store,
+        source,
+    )?;
+    Ok(image::imageops::resize(
+        &rendered,
+        width,
+        height,
+        FilterType::Lanczos3,
+    ))
+}
+
+fn render_screenshot_native(
+    width: u32,
+    height: u32,
+    brand: &str,
+    frame: &FramePlan,
+    palette: &PalettePlan,
+    font: &FontArc,
+    store: Store,
+    source: &RgbaImage,
+) -> Result<RgbaImage> {
     if frame.composition != Composition::Legacy {
         return render_art_directed_screenshot(
             width,
@@ -1635,6 +1674,44 @@ fn mix_color(base: Rgba<u8>, overlay: Rgba<u8>, amount: f32) -> Rgba<u8> {
 }
 
 fn render_feature(
+    width: u32,
+    height: u32,
+    brand: &str,
+    feature: &FeaturePlan,
+    palette: &PalettePlan,
+    font: &FontArc,
+    store: Store,
+    sources: &[PathBuf],
+) -> Result<RgbaImage> {
+    let factor = RENDER_SUPERSAMPLE;
+    if factor <= 1 {
+        return render_feature_native(width, height, brand, feature, palette, font, store, sources);
+    }
+    let target_width = width.checked_mul(factor).with_context(|| {
+        format!("rendered width overflows at supersample factor {factor}")
+    })?;
+    let target_height = height.checked_mul(factor).with_context(|| {
+        format!("rendered height overflows at supersample factor {factor}")
+    })?;
+    let rendered = render_feature_native(
+        target_width,
+        target_height,
+        brand,
+        feature,
+        palette,
+        font,
+        store,
+        sources,
+    )?;
+    Ok(image::imageops::resize(
+        &rendered,
+        width,
+        height,
+        FilterType::Lanczos3,
+    ))
+}
+
+fn render_feature_native(
     width: u32,
     height: u32,
     brand: &str,
