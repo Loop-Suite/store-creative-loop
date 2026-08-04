@@ -17,6 +17,13 @@ impl Store {
             Self::Google => "Google Play",
         }
     }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Apple => "apple",
+            Self::Google => "google",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -105,6 +112,8 @@ pub struct Generation {
     /// guarantee-like claims. Empty means those trust markers are blocked.
     #[serde(default)]
     pub verified_claim_tokens: Vec<String>,
+    #[serde(default)]
+    pub store_tone_profiles: StoreToneProfiles,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -145,6 +154,55 @@ pub struct GenerationSegment {
     pub intent: String,
     #[serde(default)]
     pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StoreToneProfile {
+    #[serde(default)]
+    pub voice: String,
+    #[serde(default)]
+    pub visual_direction: String,
+    #[serde(default)]
+    pub avoid_phrases: Vec<String>,
+}
+
+impl Default for StoreToneProfile {
+    fn default() -> Self {
+        Self {
+            voice: "Human-forward, evidence-backed, and copy-first with minimal decoration."
+                .to_string(),
+            visual_direction:
+                "Keep rhythm in margins and copy hierarchy. Never create a disconnected one-off motif."
+                    .to_string(),
+            avoid_phrases: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StoreToneProfiles {
+    #[serde(default = "default_apple_tone_profile")]
+    pub apple: StoreToneProfile,
+    #[serde(default = "default_google_tone_profile")]
+    pub google: StoreToneProfile,
+}
+
+impl StoreToneProfiles {
+    pub fn profile(&self, store: Store) -> &StoreToneProfile {
+        match store {
+            Store::Apple => &self.apple,
+            Store::Google => &self.google,
+        }
+    }
+}
+
+impl Default for StoreToneProfiles {
+    fn default() -> Self {
+        Self {
+            apple: default_apple_tone_profile(),
+            google: default_google_tone_profile(),
+        }
+    }
 }
 
 impl Default for Experiment {
@@ -253,6 +311,40 @@ fn default_primary_metric() -> String {
 }
 fn default_min_days() -> u32 {
     7
+}
+fn default_apple_tone_profile() -> StoreToneProfile {
+    StoreToneProfile {
+        voice: "Refined, premium, and restrained. Keep the tone editorial and confident without hype."
+            .to_string(),
+        visual_direction: "Prioritize spacious composition, subtle contrast, and one clear affordance per frame."
+            .to_string(),
+        avoid_phrases: vec![
+            "최고".to_string(),
+            "최강".to_string(),
+            "혁신".to_string(),
+            "완벽".to_string(),
+            "완전".to_string(),
+            "무조건".to_string(),
+            "절대".to_string(),
+        ],
+    }
+}
+fn default_google_tone_profile() -> StoreToneProfile {
+    StoreToneProfile {
+        voice: "Practical, clear, and action-oriented in local language. Lead with what is immediately useful."
+            .to_string(),
+        visual_direction:
+            "Keep copy scannable and benefit-first, with a stronger call-out hierarchy than premium-only storytelling."
+                .to_string(),
+        avoid_phrases: vec![
+            "AI".to_string(),
+            "인공지능".to_string(),
+            "즉시".to_string(),
+            "완벽".to_string(),
+            "무조건".to_string(),
+            "절대".to_string(),
+        ],
+    }
 }
 
 impl Spec {
@@ -460,6 +552,60 @@ impl Spec {
                     .iter()
                     .all(|token| !token.trim().is_empty()),
                 "generation.verified_claim_tokens must not contain empty values"
+            );
+            anyhow::ensure!(
+                !generation
+                    .store_tone_profiles
+                    .apple
+                    .voice
+                    .trim()
+                    .is_empty(),
+                "generation.store_tone_profiles.apple.voice must not be empty"
+            );
+            anyhow::ensure!(
+                !generation
+                    .store_tone_profiles
+                    .apple
+                    .visual_direction
+                    .trim()
+                    .is_empty(),
+                "generation.store_tone_profiles.apple.visual_direction must not be empty"
+            );
+            anyhow::ensure!(
+                !generation
+                    .store_tone_profiles
+                    .google
+                    .voice
+                    .trim()
+                    .is_empty(),
+                "generation.store_tone_profiles.google.voice must not be empty"
+            );
+            anyhow::ensure!(
+                !generation
+                    .store_tone_profiles
+                    .google
+                    .visual_direction
+                    .trim()
+                    .is_empty(),
+                "generation.store_tone_profiles.google.visual_direction must not be empty"
+            );
+            anyhow::ensure!(
+                generation
+                    .store_tone_profiles
+                    .apple
+                    .avoid_phrases
+                    .iter()
+                    .all(|phrase| !phrase.trim().is_empty()),
+                "generation.store_tone_profiles.apple.avoid_phrases must not contain empty values"
+            );
+            anyhow::ensure!(
+                generation
+                    .store_tone_profiles
+                    .google
+                    .avoid_phrases
+                    .iter()
+                    .all(|phrase| !phrase.trim().is_empty()),
+                "generation.store_tone_profiles.google.avoid_phrases must not contain empty values"
             );
         }
         Ok(())

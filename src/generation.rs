@@ -1,5 +1,5 @@
 use crate::llm::Llm;
-use crate::spec::{AssetKind, Generation, GenerationSegment, Spec, Target};
+use crate::spec::{AssetKind, Generation, GenerationSegment, Spec, Store, Target};
 use ab_glyph::{FontArc, PxScale};
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
@@ -306,6 +306,31 @@ pub fn generate_plans(
     feedback: Option<&str>,
 ) -> Result<Vec<CreativePlan>> {
     let template = plan_template(generation, variants, round, segment)?;
+    let mut store_tones = Vec::new();
+    if spec.targets.iter().any(|target| target.store == Store::Apple) {
+        let profile = &generation.store_tone_profiles.apple;
+        store_tones.push(format!(
+            "# Apple App Store\n- Voice: {}\n- Visual direction: {}\n- Avoid phrases: {}",
+            profile.voice,
+            profile.visual_direction,
+            list_or_none(&profile.avoid_phrases),
+        ));
+    }
+    if spec.targets.iter().any(|target| target.store == Store::Google) {
+        let profile = &generation.store_tone_profiles.google;
+        store_tones.push(format!(
+            "# Google Play\n- Voice: {}\n- Visual direction: {}\n- Avoid phrases: {}",
+            profile.voice,
+            profile.visual_direction,
+            list_or_none(&profile.avoid_phrases),
+        ));
+    }
+    let store_tones = if store_tones.is_empty() {
+        "No explicit store-specific tone profiles configured; keep one premium brand voice across targets."
+            .to_string()
+    } else {
+        store_tones.join("\n\n")
+    };
     let role_sequence = story_roles(generation)?
         .iter()
         .map(|role| role.id())
@@ -319,19 +344,21 @@ pub fn generate_plans(
         .join("\n");
     let prompt = format!(
         "# Product\nContext: {}\nGeneral audience: {}\nProduct truths: {}\nProhibited claims: {}\n\n\
+         # Store-adaptive creative direction\n{}\n\n\
          # Selected store segment\nSegment id: {}\nAudience: {}\nIntent: {}\nKeywords: {}\n\n\
          # Store-creative generation task\nCreate exactly {variants} production-ready creative plans for round {round}. Follow the exact creative family assigned to each template plan: `product_led` makes real UI dominant and demonstrates a concrete task; `outcome_led` leads with the user's desired outcome or emotion; `trust_led` emphasizes clarity, control, and visible evidence without inventing social proof. Each plan turns the same ordered raw app captures into a coherent screenshot story. The deterministic renderer—not you—will draw the final pixels.\n\n\
          Brand: {}\nTagline: {}\nStyle direction: {}\nAllowed palette values (use these exact strings only): {}\nAllowed layouts: {}\nStory roles: {}\nAllowed compositions: {}\nAllowed decorations: {}\nFrame accent options: {}\nRequired screenshot frames per plan: {}\n\n\
          # Ordered raw captures\n{}\nThe attached image is their contact sheet in the same left-to-right, top-to-bottom order. Do not invent product UI.\n\n\
          # Prior-round feedback\n{}\n\n\
          Write concise store copy, not captions that merely describe the pixels. Headline: at most 24 Korean characters or 42 Latin characters and at most two visual lines. Body: one short sentence. Use 0–3 short chips. Preserve every assigned story role, composition, decoration, accent, layout, and frame index from the template. Write `footer` as a short payoff or three-part reading axis that adds information without repeating the headline. The first frame must use `ui_dominant` when that layout is allowed, communicate one benefit, and avoid decorative clutter. Make the first three frames carry the product promise, evidence, and differentiation. Later frames should add non-redundant evidence. Visual rhythm comes from role-specific compositions and decorations, not from repeating one centered device template.\n\n\
-         Treat every non-product overlay as either a repeated set-wide system or a clearly semantic frame-specific motif. Never introduce an isolated decorative numeral, counter, badge, icon, divider, or card merely to fill space. If a position counter is used, it must form one complete sequence with the same placement, scale, and style on every screenshot; do not enlarge one frame number. A frame-specific motif must explain that frame's content without resembling product UI or unverified data. Variants may explore their assigned family, but must not change product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
+         Keep copy premium and human-crafted: avoid one-dimensional promotional language, abstract claims without UI evidence, and every listed store-profile avoid phrase. Treat every non-product overlay as either a repeated set-wide system or a clearly semantic frame-specific motif. Never introduce an isolated decorative numeral, counter, badge, icon, divider, or card merely to fill space. If a position counter is used, it must form one complete sequence with the same placement, scale, and style on every screenshot; do not enlarge one frame number. A frame-specific motif must explain that frame's content without resembling product UI or unverified data. Variants may explore their assigned family, but must not change product truth. Feature art must work at 1024x500 and may use one or two valid source indices.\n\n\
          Never write rankings, awards, ratings, review counts, download counts, percentages, guarantees, or superlatives unless the exact supporting token appears in this verified allowlist: {}. An empty allowlist means all such trust markers are prohibited.\n\n\
          Return JSON only. Keep every id/index/field in this complete template, replace all placeholder copy, and preserve the exact number of plans and frames:\n{}",
         spec.context,
         spec.audience,
         list_or_none(&spec.product_truth),
         list_or_none(&spec.prohibited_claims),
+        store_tones,
         segment.id,
         segment.audience,
         segment.intent,
@@ -456,23 +483,24 @@ pub fn render_plans(
             let (width, height) = target_size(target)?;
             match target.kind {
                 AssetKind::Screenshot => {
-                    for frame in &plan.frames {
-                        let source =
-                            image::open(&target_sources[frame.index - 1]).with_context(|| {
+                        for frame in &plan.frames {
+                            let source =
+                                image::open(&target_sources[frame.index - 1]).with_context(|| {
                                 format!(
                                     "failed to open raw screenshot: {}",
                                     target_sources[frame.index - 1].display()
                                 )
                             })?;
-                        let mut rendered = render_screenshot(
-                            width,
-                            height,
-                            &generation.brand_name,
-                            frame,
-                            &plan.palette,
-                            &font,
-                            &source.to_rgba8(),
-                        )?;
+                            let mut rendered = render_screenshot(
+                                width,
+                                height,
+                                &generation.brand_name,
+                                frame,
+                                &plan.palette,
+                                &font,
+                                target.store,
+                                &source.to_rgba8(),
+                            )?;
                         force_opaque(&mut rendered);
                         rendered.save(target_dir.join(format!("{:02}.png", frame.index)))?;
                     }
@@ -485,6 +513,7 @@ pub fn render_plans(
                         &plan.feature,
                         &plan.palette,
                         &font,
+                        target.store,
                         sources.primary(),
                     )?;
                     force_opaque(&mut rendered);
@@ -930,6 +959,22 @@ fn validate_copy_claims(spec: &Spec, generation: &Generation, plan: &CreativePla
             plan.id
         );
     }
+    let avoid_terms = generation
+        .store_tone_profiles
+        .apple
+        .avoid_phrases
+        .iter()
+        .chain(generation.store_tone_profiles.google.avoid_phrases.iter());
+    for term in avoid_terms {
+        if !term.trim().is_empty() {
+            let avoid = term.to_lowercase();
+            anyhow::ensure!(
+                !copy.contains(&avoid),
+                "{} contains tone-ban phrase: {term}",
+                plan.id
+            );
+        }
+    }
 
     const TRUST_MARKERS: &[&str] = &[
         "#1",
@@ -972,6 +1017,31 @@ fn validate_copy_claims(spec: &Spec, generation: &Generation, plan: &CreativePla
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct StoreRenderProfile {
+    deco_intensity: f32,
+    shadow_alpha: u8,
+    stroke_alpha: u8,
+    stroke_width: i32,
+}
+
+fn store_render_profile(store: Store) -> StoreRenderProfile {
+    match store {
+        Store::Apple => StoreRenderProfile {
+            deco_intensity: 0.78,
+            shadow_alpha: 88,
+            stroke_alpha: 85,
+            stroke_width: 1,
+        },
+        Store::Google => StoreRenderProfile {
+            deco_intensity: 1.10,
+            shadow_alpha: 118,
+            stroke_alpha: 125,
+            stroke_width: 2,
+        },
+    }
+}
+
 fn render_screenshot(
     width: u32,
     height: u32,
@@ -979,18 +1049,29 @@ fn render_screenshot(
     frame: &FramePlan,
     palette: &PalettePlan,
     font: &FontArc,
+    store: Store,
     source: &RgbaImage,
 ) -> Result<RgbaImage> {
     if frame.composition != Composition::Legacy {
-        return render_art_directed_screenshot(width, height, brand, frame, palette, font, source);
+        return render_art_directed_screenshot(
+            width,
+            height,
+            brand,
+            frame,
+            palette,
+            font,
+            source,
+            store,
+        );
     }
+    let profile = store_render_profile(store);
     let start = parse_color(&palette.background_start)?;
     let end = parse_color(&palette.background_end)?;
     let accent = parse_color(&palette.accent)?;
     let text = parse_color(&palette.text)?;
     let muted = parse_color(&palette.muted)?;
     let mut canvas = gradient(width, height, start, end);
-    add_decorations(&mut canvas, accent);
+    add_decorations(&mut canvas, accent, profile.deco_intensity);
     let margin = (width as f32 * 0.075) as i32;
     let brand_scale = PxScale::from(width as f32 * 0.026);
     draw_text_mut(
@@ -1075,6 +1156,7 @@ fn render_screenshot(
         screenshot_y,
         (width as f32 * 0.015) as u32,
         accent,
+        profile,
     );
     Ok(canvas)
 }
@@ -1088,6 +1170,7 @@ fn render_art_directed_screenshot(
     palette: &PalettePlan,
     font: &FontArc,
     source: &RgbaImage,
+    store: Store,
 ) -> Result<RgbaImage> {
     let dark = parse_color(&palette.background_start)?;
     let dark_end = parse_color(&palette.background_end)?;
@@ -1101,6 +1184,7 @@ fn render_art_directed_screenshot(
         .unwrap_or(parse_color(&palette.accent)?);
     let paper = mix_color(dark, text, 0.94);
     let ink = mix_color(dark, Rgba([0, 0, 0, 255]), 0.35);
+    let profile = store_render_profile(store);
     let margin = (width as f32 * 0.064) as i32;
     let wide = width as f32 / height as f32 > 0.62;
 
@@ -1166,6 +1250,7 @@ fn render_art_directed_screenshot(
                 y,
                 (width as f32 * 0.015) as u32,
                 accent,
+                profile,
             );
         }
         Composition::EditorialSplit => {
@@ -1225,6 +1310,7 @@ fn render_art_directed_screenshot(
                 y,
                 (width as f32 * 0.015) as u32,
                 accent,
+                profile,
             );
         }
         Composition::ChapterField => {
@@ -1295,6 +1381,7 @@ fn render_art_directed_screenshot(
                 y,
                 (width as f32 * 0.014) as u32,
                 accent,
+                profile,
             );
             let footer_y = (y + fitted.height() as i32 + (height as f32 * 0.065) as i32)
                 .min((height as f32 * 0.82) as i32);
@@ -1361,6 +1448,7 @@ fn render_art_directed_screenshot(
                 y,
                 (width as f32 * 0.015) as u32,
                 accent,
+                profile,
             );
         }
         Composition::Legacy => unreachable!(),
@@ -1553,6 +1641,7 @@ fn render_feature(
     feature: &FeaturePlan,
     palette: &PalettePlan,
     font: &FontArc,
+    store: Store,
     sources: &[PathBuf],
 ) -> Result<RgbaImage> {
     let start = parse_color(&palette.background_start)?;
@@ -1560,8 +1649,9 @@ fn render_feature(
     let accent = parse_color(&palette.accent)?;
     let text = parse_color(&palette.text)?;
     let muted = parse_color(&palette.muted)?;
+    let profile = store_render_profile(store);
     let mut canvas = gradient(width, height, start, end);
-    add_decorations(&mut canvas, accent);
+    add_decorations(&mut canvas, accent, profile.deco_intensity);
     let margin = (width as f32 * 0.055) as i32;
     draw_text_mut(
         &mut canvas,
@@ -1631,6 +1721,7 @@ fn render_feature(
             y,
             (height as f32 * 0.025) as u32,
             accent,
+            profile,
         );
     }
     Ok(canvas)
@@ -1665,6 +1756,7 @@ fn paste_device(
     y: i32,
     radius: u32,
     accent: Rgba<u8>,
+    profile: StoreRenderProfile,
 ) {
     let border = (source.width() as f32 * 0.012).round().max(5.0) as i32;
     let outer_width = source.width() as i32 + border * 2;
@@ -1676,7 +1768,7 @@ fn paste_device(
         outer_width,
         outer_height,
         radius as i32 + border,
-        Rgba([0, 0, 0, 100]),
+        Rgba([0, 0, 0, profile.shadow_alpha]),
     );
     fill_rounded_blended(
         canvas,
@@ -1711,9 +1803,9 @@ fn paste_device(
             }
         }
     }
-    let line_width = 2_i32;
+    let line_width = profile.stroke_width.max(1);
     for offset in 0..line_width {
-        let color = Rgba([accent[0], accent[1], accent[2], 120]);
+        let color = Rgba([accent[0], accent[1], accent[2], profile.stroke_alpha]);
         stroke_rounded(
             canvas,
             x - border + offset,
@@ -1747,17 +1839,15 @@ fn gradient(width: u32, height: u32, start: Rgba<u8>, end: Rgba<u8>) -> RgbaImag
     image
 }
 
-fn add_decorations(canvas: &mut RgbaImage, accent: Rgba<u8>) {
+fn add_decorations(canvas: &mut RgbaImage, accent: Rgba<u8>, deco_intensity: f32) {
+    let deco_intensity = deco_intensity.clamp(0.4, 1.8);
     let width = canvas.width() as i32;
     let height = canvas.height() as i32;
     for index in 0..5 {
         let radius = (width as f32 * (0.16 + index as f32 * 0.035)) as i32;
-        let color = Rgba([
-            accent[0],
-            accent[1],
-            accent[2],
-            12_u8.saturating_sub(index * 2),
-        ]);
+        let base_alpha = (12_u16.saturating_sub((index * 2) as u16) as f32) * deco_intensity;
+        let alpha = base_alpha.clamp(1.0, 24.0).round() as u8;
+        let color = Rgba([accent[0], accent[1], accent[2], alpha]);
         fill_rounded_blended(
             canvas,
             width - radius,
@@ -1770,11 +1860,12 @@ fn add_decorations(canvas: &mut RgbaImage, accent: Rgba<u8>) {
     }
     let bar_width = (width as f32 * 0.17) as u32;
     let bar_height = (height as f32 * 0.004).max(3.0) as u32;
+    let bar_alpha = (255.0 * (0.10 * deco_intensity)).clamp(35.0, 160.0).round() as u8;
     draw_filled_rect_mut(
         canvas,
         Rect::at((width as f32 * 0.075) as i32, (height as f32 * 0.12) as i32)
             .of_size(bar_width, bar_height),
-        accent,
+        Rgba([accent[0], accent[1], accent[2], bar_alpha]),
     );
 }
 
@@ -2148,6 +2239,7 @@ mod tests {
             },
             segments: Vec::new(),
             verified_claim_tokens: Vec::new(),
+            store_tone_profiles: Default::default(),
         };
 
         let recipes = frame_recipes(&generation, 0).unwrap();
@@ -2187,6 +2279,7 @@ mod tests {
             art_direction: Default::default(),
             segments: Vec::new(),
             verified_claim_tokens: Vec::new(),
+            store_tone_profiles: Default::default(),
         };
         let spec = test_spec();
         let segment = GenerationSegment {
@@ -2254,6 +2347,7 @@ mod tests {
             art_direction: Default::default(),
             segments: Vec::new(),
             verified_claim_tokens: Vec::new(),
+            store_tone_profiles: Default::default(),
         };
         let spec = test_spec();
         let segment = GenerationSegment {
@@ -2278,7 +2372,7 @@ mod tests {
             frames: vec![FramePlan {
                 index: 1,
                 badge: "badge".into(),
-                headline: "평점 4.9 최고의 앱".into(),
+                headline: "평점 4.9 리뷰 점수".into(),
                 body: "body".into(),
                 chips: vec![],
                 layout: Layout::UiDominant,
