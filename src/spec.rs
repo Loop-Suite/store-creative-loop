@@ -17,13 +17,6 @@ impl Store {
             Self::Google => "Google Play",
         }
     }
-
-    pub fn slug(self) -> &'static str {
-        match self {
-            Self::Apple => "apple",
-            Self::Google => "google",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -308,7 +308,7 @@ pub fn generate_plans(
     let template = plan_template(generation, variants, round, segment)?;
     let mut store_tones = Vec::new();
     if spec.targets.iter().any(|target| target.store == Store::Apple) {
-        let profile = &generation.store_tone_profiles.apple;
+        let profile = generation.store_tone_profiles.profile(Store::Apple);
         store_tones.push(format!(
             "# Apple App Store\n- Voice: {}\n- Visual direction: {}\n- Avoid phrases: {}",
             profile.voice,
@@ -317,7 +317,7 @@ pub fn generate_plans(
         ));
     }
     if spec.targets.iter().any(|target| target.store == Store::Google) {
-        let profile = &generation.store_tone_profiles.google;
+        let profile = generation.store_tone_profiles.profile(Store::Google);
         store_tones.push(format!(
             "# Google Play\n- Voice: {}\n- Visual direction: {}\n- Avoid phrases: {}",
             profile.voice,
